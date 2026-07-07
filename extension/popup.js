@@ -103,8 +103,20 @@ async function runExport() {
 
       const conversation = { metadata: { name: data.name, uuid: data.uuid, created_at: data.created_at, updated_at: data.updated_at, model: data.model }, data };
 
+      let artifactsData = { artifactsZip: null, contentFiles: [] };
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        setStatus('Capturing artifacts and content files...', '');
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONVERSATION_ARTIFACTS' });
+        if (response) {
+          artifactsData = response;
+        }
+      } catch (e) {
+        // Content script not present/responsive — proceed without artifacts/content.
+      }
+
       setStatus('Building zip...', '');
-      blob = await buildConversationZip(conversation);
+      blob = await buildConversationZip(conversation, artifactsData);
       downloadFilename = `${conversationFolderName(conversation)}.zip`;
       setStatus('✅ Exported conversation.', 'success');
     } else {
