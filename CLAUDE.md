@@ -15,6 +15,7 @@ This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3)
 - `extension/lib/markdown.js` - Converts conversation JSON to Markdown; builds the project index; sanitizes filenames.
 - `extension/lib/zipBuilder.js` - Builds the in-memory folder tree and generates the zip Blob via vendored JSZip.
 - `extension/lib/jszip.min.js` - Vendored JSZip (no CDN — Manifest V3 CSP disallows remote code).
+- `extension/content.js` - Content script injected on `claude.ai/project/*`; scrapes the project's Memory/Instructions text from the DOM on request (no REST API exposes this data).
 
 ## Key Technical Details
 
@@ -30,10 +31,13 @@ This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3)
 
 ### Output Structure
 Every export is a single `.zip` download (built with vendored JSZip, never written to disk as loose files):
-- Project export: `index.md` at the root + one folder per conversation (`<title>_<uuid8>/`), each containing `conversation.md`, `artefacts/` (empty), `contenu/` (empty).
-- Single conversation export: one folder with the same `conversation.md` + `artefacts/` + `contenu/` structure, no index.
+- Project export: `index.md` at the root, plus `memory.md`/`instructions.md` (only if found — see Project Metadata Scraping below), plus an empty `fichiers/` placeholder, plus one folder per conversation (`<title>_<uuid8>/`), each containing `conversation.md`, `artefacts/` (empty), `contenu/` (empty).
+- Single conversation export: one folder with the same `conversation.md` + `artefacts/` + `contenu/` structure, no index, no memory/instructions/fichiers (project-only concepts).
 
-`artefacts/` (Claude-generated artifacts) and `contenu/` (uploaded file attachments) are placeholders in the current version — populating them with real content is a planned future phase, not yet implemented.
+`artefacts/` (Claude-generated artifacts), `contenu/` (uploaded file attachments), and `fichiers/` (project knowledge files) are placeholders in the current version — populating them with real content is a planned future phase, not yet implemented.
+
+### Project Metadata Scraping (Memory & Instructions)
+Claude's Memory and Instructions text for a project is not exposed by any REST API the extension uses — it only exists rendered in the project page's DOM. `extension/content.js` is injected on `claude.ai/project/*` pages and, on request (`chrome.runtime.onMessage` with `{type: 'GET_PROJECT_METADATA'}`), scans for `<h3>` elements matching the exact label text `"Mémoire"`/`"Instructions"` (French UI only — no i18n support), then walks up to 5 ancestor levels looking for a sibling `<p>` with the section's text. During a project export, `popup.js` messages the active tab's content script and passes the result into `buildProjectZip`; if the content script isn't present/responsive (page not loaded, wrong page, or a UI change broke the selectors), the export proceeds without `memory.md`/`instructions.md` rather than failing — this is enrichment, not a required part of a successful export.
 
 ### Rate Limiting & Batching
 - Conversations fetched in batches of 5, with a 500-750ms delay between batches (750ms above 50 conversations).

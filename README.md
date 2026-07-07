@@ -28,6 +28,9 @@ This extension is not published to the Chrome Web Store. Install it manually:
 **Project export** (`project_<id>.zip`):
 ```
 index.md
+memory.md               (if the project has a Memory summary configured)
+instructions.md         (if the project has custom Instructions configured)
+fichiers/
 conversation-title_<uuid8>/
   conversation.md
   artefacts/
@@ -46,7 +49,7 @@ conversation-title_<uuid8>/
   contenu/
 ```
 
-`artefacts/` and `contenu/` are currently created empty — they're reserved for a future update that will populate them with Claude-generated artifacts and uploaded file attachments respectively.
+`artefacts/` and `contenu/` are currently created empty — they're reserved for a future update that will populate them with Claude-generated artifacts and uploaded file attachments respectively. `fichiers/` is likewise an empty placeholder, reserved for a future update that will download the project's uploaded knowledge files. `memory.md`/`instructions.md` are only added when the project page has that section populated — they're scraped from the currently open project tab's page content, so the project's tab must be open in the browser when you export.
 
 ## How it works
 
