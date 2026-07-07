@@ -45,5 +45,68 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function runExport() {
-  setStatus('Export logic not yet implemented.', 'error');
+  const exportBtn = document.getElementById('export-btn');
+  exportBtn.disabled = true;
+
+  try {
+    setStatus('Resolving organization ID...', '');
+    const orgId = await getOrganizationId();
+    if (!orgId) {
+      throw new Error('Could not find your organization ID. Make sure you are logged into claude.ai.');
+    }
+
+    let blob, downloadFilename;
+
+    if (exportMode === 'project') {
+      setStatus('Fetching conversations list...', '');
+      const conversationsList = await fetchConversationsList(orgId, exportProjectId);
+
+      if (!conversationsList || conversationsList.length === 0) {
+        throw new Error('No conversations found in this project.');
+      }
+
+      const conversations = await fetchAllConversations(orgId, conversationsList, (fetched, total) => {
+        setStatus(`Fetched ${fetched}/${total} conversations...`, '');
+      });
+
+      if (conversations.length === 0) {
+        throw new Error('Failed to fetch any conversations.');
+      }
+
+      setStatus(`Building zip for ${conversations.length} conversations...`, '');
+      blob = await buildProjectZip(exportProjectId, conversations);
+      downloadFilename = `project_${exportProjectId.substring(0, 8)}.zip`;
+
+      if (conversations.length < conversationsList.length) {
+        const failedCount = conversationsList.length - conversations.length;
+        setStatus(`✅ Exported ${conversations.length}/${conversationsList.length} conversations (${failedCount} failed to fetch).`, 'success');
+      } else {
+        setStatus(`✅ Exported ${conversations.length} conversations.`, 'success');
+      }
+    } else if (exportMode === 'conversation') {
+      setStatus('Fetching conversation...', '');
+      const data = await fetchConversation(orgId, exportConversationId);
+      if (!data) {
+        throw new Error('Failed to fetch this conversation.');
+      }
+
+      const conversation = { metadata: { name: data.name, uuid: data.uuid, created_at: data.created_at, updated_at: data.updated_at, model: data.model }, data };
+
+      setStatus('Building zip...', '');
+      blob = await buildConversationZip(conversation);
+      downloadFilename = `${conversationFolderName(conversation)}.zip`;
+      setStatus('✅ Exported conversation.', 'success');
+    } else {
+      throw new Error('No project or conversation detected.');
+    }
+
+    const url = URL.createObjectURL(blob);
+    chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
+      URL.revokeObjectURL(url);
+    });
+  } catch (error) {
+    setStatus(`Export failed: ${error.message}`, 'error');
+  } finally {
+    exportBtn.disabled = false;
+  }
 }
