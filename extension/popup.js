@@ -65,6 +65,17 @@ async function runExport() {
         throw new Error('No conversations found in this project.');
       }
 
+      let projectMetadata = { memory: null, instructions: null };
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PROJECT_METADATA' });
+        if (response) {
+          projectMetadata = response;
+        }
+      } catch (e) {
+        // Content script not present/responsive — proceed without memory/instructions.
+      }
+
       const conversations = await fetchAllConversations(orgId, conversationsList, (fetched, total) => {
         setStatus(`Fetched ${fetched}/${total} conversations...`, '');
       });
@@ -74,7 +85,7 @@ async function runExport() {
       }
 
       setStatus(`Building zip for ${conversations.length} conversations...`, '');
-      blob = await buildProjectZip(exportProjectId, conversations);
+      blob = await buildProjectZip(exportProjectId, conversations, projectMetadata);
       downloadFilename = `project_${exportProjectId.substring(0, 8)}.zip`;
 
       if (conversations.length < conversationsList.length) {
