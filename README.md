@@ -49,7 +49,9 @@ conversation-title_<uuid8>/
   contenu/
 ```
 
-`artefacts/` and `contenu/` are currently created empty — they're reserved for a future update that will populate them with Claude-generated artifacts and uploaded file attachments respectively. `fichiers/` is likewise an empty placeholder, reserved for a future update that will download the project's uploaded knowledge files. `memory.md`/`instructions.md` are only added when the project page has that section populated — they're scraped from the currently open project tab's page content, so the project's tab must be open in the browser when you export.
+For **single conversation exports**, `artefacts/` and `contenu/` are populated automatically: `artefacts/` contains any Claude-generated artifacts attached to the conversation (captured by simulating a click on the conversation's "Download all" button and unzipping the result), and `contenu/` contains any individually-attached image files (fetched directly). This only works for the conversation currently open in your active browser tab, and only captures image-based attachments (non-image files, like `.pptx` attachments, currently have no discoverable download link and are skipped). If a conversation has no artifacts or no attached files, the corresponding folder stays empty.
+
+For **project exports**, `artefacts/` and `contenu/` are still created empty for every conversation — this per-conversation capture mechanism is scoped to single-conversation export only for now (a future update may extend it to project exports). `fichiers/` is likewise an empty placeholder, reserved for a future update that will download the project's uploaded knowledge files. `memory.md`/`instructions.md` are only added when the project page has that section populated — they're scraped from the currently open project tab's page content, so the project's tab must be open in the browser when you export.
 
 ## How it works
 

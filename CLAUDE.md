@@ -15,7 +15,8 @@ This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3)
 - `extension/lib/markdown.js` - Converts conversation JSON to Markdown; builds the project index; sanitizes filenames.
 - `extension/lib/zipBuilder.js` - Builds the in-memory folder tree and generates the zip Blob via vendored JSZip.
 - `extension/lib/jszip.min.js` - Vendored JSZip (no CDN — Manifest V3 CSP disallows remote code).
-- `extension/content.js` - Content script injected on `claude.ai/project/*`; scrapes the project's Memory/Instructions text from the DOM on request (no REST API exposes this data).
+- `extension/content.js` - Content script injected on `claude.ai/project/*` and `claude.ai/chat/*`; scrapes the project's Memory/Instructions text (project pages) and orchestrates conversation artifact/content capture (chat pages) from the DOM on request (no REST API exposes this data).
+- `extension/main-world-hook.js` - Content script injected on `claude.ai/chat/*` with `"world": "MAIN"`; hooks `URL.createObjectURL` to intercept the artifact zip Blob claude.ai generates client-side when "Download all" is clicked.
 
 ## Key Technical Details
 
@@ -31,13 +32,24 @@ This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3)
 
 ### Output Structure
 Every export is a single `.zip` download (built with vendored JSZip, never written to disk as loose files):
-- Project export: `index.md` at the root, plus `memory.md`/`instructions.md` (only if found — see Project Metadata Scraping below), plus an empty `fichiers/` placeholder, plus one folder per conversation (`<title>_<uuid8>/`), each containing `conversation.md`, `artefacts/` (empty), `contenu/` (empty).
-- Single conversation export: one folder with the same `conversation.md` + `artefacts/` + `contenu/` structure, no index, no memory/instructions/fichiers (project-only concepts).
+- Project export: `index.md` at the root, plus `memory.md`/`instructions.md` (only if found — see Project Metadata Scraping below), plus an empty `fichiers/` placeholder, plus one folder per conversation (`<title>_<uuid8>/`), each containing `conversation.md`, `artefacts/` (empty), `contenu/` (empty) — per-conversation artifact/content capture (below) is scoped to single-conversation export only, not project export.
+- Single conversation export: one folder with `conversation.md`, `artefacts/` (populated with unzipped Claude-generated artifacts if any were captured, otherwise empty), `contenu/` (populated with fetched image attachments if any were found, otherwise empty). No index, no memory/instructions/fichiers (project-only concepts).
 
-`artefacts/` (Claude-generated artifacts), `contenu/` (uploaded file attachments), and `fichiers/` (project knowledge files) are placeholders in the current version — populating them with real content is a planned future phase, not yet implemented.
+`fichiers/` (project knowledge files) remains a placeholder in the current version — populating it with real content is a planned future phase, not yet implemented. Project-mode `artefacts/`/`contenu/` are likewise still empty placeholders; only single-conversation exports populate them (see Conversation Artifact & Content Capture below).
 
 ### Project Metadata Scraping (Memory & Instructions)
 Claude's Memory and Instructions text for a project is not exposed by any REST API the extension uses — it only exists rendered in the project page's DOM. `extension/content.js` is injected on `claude.ai/project/*` pages and, on request (`chrome.runtime.onMessage` with `{type: 'GET_PROJECT_METADATA'}`), scans for `<h3>` elements matching the exact label text `"Mémoire"`/`"Instructions"` (French UI only — no i18n support), then walks up to 5 ancestor levels looking for a sibling `<p>` with the section's text. During a project export, `popup.js` messages the active tab's content script and passes the result into `buildProjectZip`; if the content script isn't present/responsive (page not loaded, wrong page, or a UI change broke the selectors), the export proceeds without `memory.md`/`instructions.md` rather than failing — this is enrichment, not a required part of a successful export.
+
+### Conversation Artifact & Content Capture
+Neither a conversation's Claude-generated artifacts nor its individually-attached files are exposed by any REST API — both only exist behind UI interaction on the conversation's "Files" sidebar. This is the most fragile mechanism in the extension: it depends on exact button label text (`"Fichiers"`, `"Tout télécharger"`) and section heading text (`"Artéfacts"`, `"Contenu"`) matching claude.ai's current French-only UI, and on claude.ai using `URL.createObjectURL` internally for its own "download all" flow.
+
+During single-conversation export, `popup.js` sends `{type: 'GET_CONVERSATION_ARTIFACTS'}` to `extension/content.js`, which:
+1. Clicks the Files sidebar toggle (`[aria-label="Fichiers"]`), then polls (bounded, ~3s) for an "Artéfacts" heading to appear.
+2. If found, locates and clicks its "Tout télécharger" button — but first arms `extension/main-world-hook.js` via `window.postMessage` (the hook runs in the page's MAIN JS world, necessary to intercept `URL.createObjectURL` calls made by claude.ai's own React code, which an isolated-world content script cannot observe).
+3. Awaits the hook's captured Blob (as an ArrayBuffer, since raw Blobs aren't reliably structured-cloneable across the `chrome.runtime` messaging boundary) with a ~10s timeout, then closes the sidebar again regardless of outcome.
+4. Separately (independent of the above), scrapes the "Contenu" section (distinct from the project-level "Contenu du projet") for `<img alt src>` thumbnails, returning `{filename, url}` pairs — only image attachments have a discoverable `/preview` URL this way; non-image files (e.g. `.pptx`) have no fetchable link in the DOM and are silently skipped.
+
+`extension/lib/zipBuilder.js` then unzips the captured artifact Blob (via JSZip, preserving its internal folder structure) into `artefacts/`, and fetches each scraped content file (`credentials: 'include'`) into `contenu/`, skipping individual failures without aborting. Every step degrades gracefully — a missing button, missing section, capture timeout, or failed fetch never fails the overall export, it just leaves the corresponding folder (partially) empty. A real Chrome download is still triggered on disk when "Tout télécharger" is clicked (same as manual use) — this is an accepted side effect of using real UI interaction, not a bug.
 
 ### Rate Limiting & Batching
 - Conversations fetched in batches of 5, with a 500-750ms delay between batches (750ms above 50 conversations).
