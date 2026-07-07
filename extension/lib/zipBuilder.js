@@ -5,9 +5,17 @@ function buildConversationFolder(zip, folderName, conversation) {
   folder.folder('contenu').file('.gitkeep', '');
 }
 
-async function buildProjectZip(projectId, conversations) {
+async function buildProjectZip(projectId, conversations, projectMetadata) {
   const zip = new JSZip();
   zip.file('index.md', createIndexMarkdown(projectId, conversations));
+
+  if (projectMetadata && projectMetadata.memory) {
+    zip.file('memory.md', projectMetadata.memory);
+  }
+  if (projectMetadata && projectMetadata.instructions) {
+    zip.file('instructions.md', projectMetadata.instructions);
+  }
+  zip.folder('fichiers').file('.gitkeep', '');
 
   conversations.forEach(conv => {
     const folderName = conversationFolderName(conv);
