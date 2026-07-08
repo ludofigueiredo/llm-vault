@@ -7,7 +7,7 @@ A Chrome extension that exports Claude conversations to structured Markdown.
 
 ## Installation (developer mode)
 
-This extension is not published to the Chrome Web Store. Install it manually:
+This extension is not published to the Chrome Web Store. Install it manually (requires Chrome 114+ for side panel support):
 
 1. Download or clone this repository.
 2. Open `chrome://extensions` in Chrome.
@@ -18,8 +18,8 @@ This extension is not published to the Chrome Web Store. Install it manually:
 ## Usage
 
 1. Log into [claude.ai](https://claude.ai).
-2. Navigate to a Claude Project page (`claude.ai/project/[uuid]`) or a conversation page (`claude.ai/chat/[uuid]`).
-3. Click the extension icon in your Chrome toolbar.
+2. Click the extension icon in your Chrome toolbar — a side panel opens and stays docked to the side of the browser window (it stays open across tab switches until you close it).
+3. Navigate to a Claude Project page (`claude.ai/project/[uuid]`) or a conversation page (`claude.ai/chat/[uuid]`); the panel updates to show the detected context.
 4. Click **Export Project** or **Export Conversation** (the button label depends on which page you're on).
 5. Wait for the export to complete — a `.zip` file will download automatically.
 

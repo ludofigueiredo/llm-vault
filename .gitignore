@@ -82,5 +82,8 @@ yarn-error.log*
 .yarn-integrity
 
 
-web_source.html
-sidebar.html
+
+# Scratch HTML snapshots captured for reference during development
+/web_source.html
+/sidebar.html
+/select_projects.html

@@ -8,8 +8,9 @@ This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3)
 
 ## Architecture
 
-- `extension/manifest.json` - Manifest V3 config (permissions: `downloads`, `activeTab`, `cookies`; host permission: `https://claude.ai/*`).
-- `extension/popup.html` / `extension/popup.js` - Popup UI: detects context (project vs conversation vs neither) from the active tab's URL, orchestrates the export pipeline, shows progress/status.
+- `extension/manifest.json` - Manifest V3 config (permissions: `downloads`, `activeTab`, `cookies`, `sidePanel`, `tabs`; host permission: `https://claude.ai/*`).
+- `extension/background.js` - Minimal service worker; its only job is calling `chrome.sidePanel.setPanelBehavior({openPanelOnActionClick: true})` so clicking the toolbar icon opens the side panel.
+- `extension/sidepanel.html` / `extension/sidepanel.js` - Side panel UI (persistent, docked to the browser window — replaces the old popup): detects context (project vs conversation vs neither) from the active tab's URL, re-detects on tab switch/navigation (`chrome.tabs.onActivated`/`onUpdated`, since the panel doesn't reload like a popup did), orchestrates the export pipeline, shows progress/status.
 - `extension/lib/orgId.js` - Project/conversation ID extraction from URLs; organization ID lookup via `chrome.cookies.get` on the `lastActiveOrg` cookie.
 - `extension/lib/api.js` - Fetches the conversations list and individual conversations from claude.ai's internal API, with batching (5 at a time) and exponential-backoff retry on rate limiting (429).
 - `extension/lib/markdown.js` - Converts conversation JSON to Markdown; builds the project index; sanitizes filenames.
@@ -23,7 +24,7 @@ This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3)
 ### ID Extraction
 - Project ID: parsed from the active tab's URL, pattern `/project/[uuid]`.
 - Conversation ID: parsed from the active tab's URL, pattern `/chat/[uuid]`.
-- Organization ID: read from the `lastActiveOrg` cookie via `chrome.cookies.get({url: 'https://claude.ai', name: 'lastActiveOrg'})`. Unlike the old console-script approach, the popup has no access to the page's `localStorage`/`sessionStorage`/JS globals, so there is no fallback chain beyond the cookie — if it's missing, export fails with an explicit error asking the user to confirm they're logged in.
+- Organization ID: read from the `lastActiveOrg` cookie via `chrome.cookies.get({url: 'https://claude.ai', name: 'lastActiveOrg'})`. Unlike the old console-script approach, the side panel has no access to the page's `localStorage`/`sessionStorage`/JS globals, so there is no fallback chain beyond the cookie — if it's missing, export fails with an explicit error asking the user to confirm they're logged in.
 
 ### API Flow
 1. **Conversations List** (project mode only): `GET /api/organizations/[org]/projects/[project]/conversations_v2`
@@ -38,12 +39,12 @@ Every export is a single `.zip` download (built with vendored JSZip, never writt
 `fichiers/` (project knowledge files) remains a placeholder in the current version — populating it with real content is a planned future phase, not yet implemented. Project-mode `artefacts/`/`contenu/` are likewise still empty placeholders; only single-conversation exports populate them (see Conversation Artifact & Content Capture below).
 
 ### Project Metadata Scraping (Memory & Instructions)
-Claude's Memory and Instructions text for a project is not exposed by any REST API the extension uses — it only exists rendered in the project page's DOM. `extension/content.js` is injected on `claude.ai/project/*` pages and, on request (`chrome.runtime.onMessage` with `{type: 'GET_PROJECT_METADATA'}`), scans for `<h3>` elements matching the exact label text `"Mémoire"`/`"Instructions"` (French UI only — no i18n support), then walks up to 5 ancestor levels looking for a sibling `<p>` with the section's text. During a project export, `popup.js` messages the active tab's content script and passes the result into `buildProjectZip`; if the content script isn't present/responsive (page not loaded, wrong page, or a UI change broke the selectors), the export proceeds without `memory.md`/`instructions.md` rather than failing — this is enrichment, not a required part of a successful export.
+Claude's Memory and Instructions text for a project is not exposed by any REST API the extension uses — it only exists rendered in the project page's DOM. `extension/content.js` is injected on `claude.ai/project/*` pages and, on request (`chrome.runtime.onMessage` with `{type: 'GET_PROJECT_METADATA'}`), scans for `<h3>` elements matching the exact label text `"Mémoire"`/`"Instructions"` (French UI only — no i18n support), then walks up to 5 ancestor levels looking for a sibling `<p>` with the section's text. During a project export, `sidepanel.js` messages the active tab's content script and passes the result into `buildProjectZip`; if the content script isn't present/responsive (page not loaded, wrong page, or a UI change broke the selectors), the export proceeds without `memory.md`/`instructions.md` rather than failing — this is enrichment, not a required part of a successful export.
 
 ### Conversation Artifact & Content Capture
 Neither a conversation's Claude-generated artifacts nor its individually-attached files are exposed by any REST API — both only exist behind UI interaction on the conversation's "Files" sidebar. This is the most fragile mechanism in the extension: it depends on exact button label text (`"Fichiers"`, `"Tout télécharger"`) and section heading text (`"Artéfacts"`, `"Contenu"`) matching claude.ai's current French-only UI, and on claude.ai using `URL.createObjectURL` internally for its own "download all" flow.
 
-During single-conversation export, `popup.js` sends `{type: 'GET_CONVERSATION_ARTIFACTS'}` to `extension/content.js`, which:
+During single-conversation export, `sidepanel.js` sends `{type: 'GET_CONVERSATION_ARTIFACTS'}` to `extension/content.js`, which:
 1. Clicks the Files sidebar toggle (`[aria-label="Fichiers"]`), then polls (bounded, ~3s) for an "Artéfacts" heading to appear.
 2. If found, locates and clicks its "Tout télécharger" button — but first arms `extension/main-world-hook.js` via `window.postMessage` (the hook runs in the page's MAIN JS world, necessary to intercept `URL.createObjectURL` calls made by claude.ai's own React code, which an isolated-world content script cannot observe).
 3. Awaits the hook's captured Blob (as an ArrayBuffer, since raw Blobs aren't reliably structured-cloneable across the `chrome.runtime` messaging boundary) with a ~10s timeout, then closes the sidebar again regardless of outcome.
@@ -60,7 +61,7 @@ During single-conversation export, `popup.js` sends `{type: 'GET_CONVERSATION_AR
 
 ### Code Standards
 - Pure vanilla JavaScript - no frameworks, no bundler, no build step.
-- Manifest V3 - all scripts loaded via `<script>` tags in `popup.html`, no ES modules, no dynamic `import()`.
+- Manifest V3 - all scripts loaded via `<script>` tags in `sidepanel.html`, no ES modules, no dynamic `import()`.
 - The only external dependency is the vendored `jszip.min.js` - do not add a CDN reference (blocked by MV3 CSP).
 
 ### Testing Approach
@@ -70,13 +71,14 @@ No automated test suite. Manual verification against a live claude.ai session, c
 3. Larger project (50+ conversations) - verify batching/delay behavior.
 4. Single conversation export outside a project.
 5. Logged-out / auth failure state.
-6. Popup opened on an unrelated claude.ai page or a different site - should show the "navigate to a project/conversation" message, no button.
+6. Side panel opened on an unrelated claude.ai page or a different site - should show the "navigate to a project/conversation" message, no button.
+7. Side panel context updates correctly when switching tabs or navigating within the same tab, without needing to close/reopen the panel.
 
 ### Testing New Changes
 1. Open `chrome://extensions`, enable Developer mode.
 2. Click "Load unpacked" (first time) or the refresh icon on the extension card (after edits) and select/reload the `extension/` folder.
-3. Navigate to a Claude project or conversation page and use the popup.
-4. Inspect the popup's console via right-click → Inspect for `console.log`/error output.
+3. Navigate to a Claude project or conversation page and use the side panel (click the toolbar icon to open it if not already open).
+4. Inspect the panel's console via right-click inside the panel → Inspect for `console.log`/error output.
 
 ## Security Considerations
 

@@ -3,10 +3,14 @@
   "name": "Claude Conversations Exporter",
   "version": "1.0.0",
   "description": "Export Claude Project conversations or a single conversation as a structured Markdown zip.",
-  "permissions": ["downloads", "activeTab", "cookies"],
+  "permissions": ["downloads", "activeTab", "cookies", "sidePanel", "tabs"],
   "host_permissions": ["https://claude.ai/*"],
-  "action": {
-    "default_popup": "popup.html"
+  "action": {},
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {

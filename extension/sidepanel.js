@@ -44,6 +44,19 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+// The side panel is persistent (unlike the old popup, it doesn't reload on
+// every open), so context must be re-detected whenever the active tab
+// changes or navigates, not just once at panel load.
+chrome.tabs.onActivated.addListener(() => {
+  detectContext();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url && tab.active) {
+    detectContext();
+  }
+});
+
 async function runExport() {
   const exportBtn = document.getElementById('export-btn');
   exportBtn.disabled = true;
