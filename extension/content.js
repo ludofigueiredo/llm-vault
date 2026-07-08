@@ -156,7 +156,6 @@ async function getConversationArtifacts() {
   return { artifactsZip, contentFiles };
 }
 
-let selectionModeActive = false;
 let selectedProjectUuids = new Set();
 const SELECTED_BORDER_CLASS = 'claude-exporter-selected';
 let selectionClickListener = null;
@@ -178,7 +177,7 @@ function findProjectListItems() {
 function getProjectInfoFromListItem(li) {
   const link = li.querySelector('a[href^="/project/"]');
   if (!link) return null;
-  const match = link.getAttribute('href').match(/\/project\/([a-f0-9-]{36})/);
+  const match = link.getAttribute('href').match(/\/project\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
   if (!match) return null;
   const nameEl = link.querySelector('.truncate');
   const name = nameEl ? nameEl.textContent.trim() : match[1];
@@ -215,7 +214,6 @@ function startSelectionMode() {
 
   ensureSelectionStyle();
   selectedProjectUuids = new Set();
-  selectionModeActive = true;
   selectionClickListener = handleSelectionClick;
   list.addEventListener('click', selectionClickListener, true);
   return true;
@@ -239,7 +237,6 @@ function stopSelectionMode() {
     list.removeEventListener('click', selectionClickListener, true);
   }
   selectionClickListener = null;
-  selectionModeActive = false;
 
   for (const li of findProjectListItems()) {
     li.classList.remove(SELECTED_BORDER_CLASS);
@@ -270,7 +267,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
   if (message && message.type === 'PING') {
-    sendResponse({ pong: true });
+    sendResponse({ pong: true, pathname: window.location.pathname });
     return false;
   }
   return false;

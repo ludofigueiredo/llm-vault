@@ -3,6 +3,7 @@ let exportProjectId = null;
 let exportConversationId = null;
 let selectionMode = false;
 let selectedProjects = [];
+let batchInProgress = false;
 
 function isProjectsListingUrl(url) {
   try {
@@ -22,9 +23,12 @@ async function detectContext() {
   const selectProjectsBtn = document.getElementById('select-projects-btn');
   const confirmSelectionBtn = document.getElementById('confirm-selection-btn');
 
-  if (selectionMode) {
-    // Don't clobber the selection-mode UI while a selection is in progress —
-    // context re-detection from tab-switch listeners must not interrupt it.
+  if (selectionMode || batchInProgress) {
+    // Don't clobber the selection-mode/batch-export UI while either is in
+    // progress — context re-detection from tab-switch listeners (fired by
+    // this extension's own chrome.tabs.update() calls during a batch, among
+    // other things) must not interrupt it or re-enable the single-project
+    // export button against a tab a batch is actively driving.
     return;
   }
 
@@ -68,13 +72,18 @@ function setStatus(message, kind) {
   status.className = kind || '';
 }
 
-function waitForContentScriptReady(tabId, timeoutMs) {
+function waitForContentScriptReady(tabId, timeoutMs, expectedPathname) {
   return new Promise((resolve) => {
     const start = Date.now();
     const attempt = async () => {
       try {
         const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-        if (response && response.pong) {
+        // A stale content script on the PREVIOUS page can still answer PING
+        // for a brief window after chrome.tabs.update() resolves (navigation
+        // has only been initiated, not completed) — require the responding
+        // page's own pathname to match the page we just navigated to, so we
+        // don't proceed against the wrong page's content script.
+        if (response && response.pong && (!expectedPathname || response.pathname === expectedPathname)) {
           resolve(true);
           return;
         }
@@ -182,89 +191,105 @@ async function confirmSelection() {
 }
 
 async function startBatchExport(projects) {
-  const confirmBtn = document.getElementById('confirm-selection-btn');
   const selectBtn = document.getElementById('select-projects-btn');
 
-  setStatus('Resolving organization ID...', '');
-  const orgId = await getOrganizationId();
-  if (!orgId) {
-    setStatus('Batch export failed: could not find your organization ID. Make sure you are logged into claude.ai.', 'error');
-    selectBtn.style.display = 'block';
-    return;
-  }
+  // While a batch is in progress, this function itself drives the active
+  // tab's navigation via chrome.tabs.update() — each of those triggers this
+  // panel's own chrome.tabs.onUpdated listener, which would otherwise call
+  // detectContext() mid-batch and re-enable the single-project "Export
+  // Project" button against the very tab the batch is driving. Guarding on
+  // batchInProgress (checked by detectContext()) prevents that.
+  batchInProgress = true;
+  exportBtnDisabledForBatch(true);
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab.id;
-
-  const zip = new JSZip();
-  const succeeded = [];
-  const failed = [];
-
-  for (let i = 0; i < projects.length; i++) {
-    const project = projects[i];
-    setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name}...`, '');
-
-    try {
-      await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${project.uuid}` });
-
-      const ready = await waitForContentScriptReady(tabId, 15000);
-      if (!ready) {
-        throw new Error('page did not finish loading in time');
-      }
-
-      const conversationsList = await fetchConversationsList(orgId, project.uuid);
-      if (!conversationsList || conversationsList.length === 0) {
-        throw new Error('no conversations found');
-      }
-
-      let projectMetadata = { memory: null, instructions: null };
-      try {
-        const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_METADATA' });
-        if (response) {
-          projectMetadata = response;
-        }
-      } catch (e) {
-        // Proceed without memory/instructions for this project.
-      }
-
-      const conversations = await fetchAllConversations(orgId, conversationsList, (fetched, total) => {
-        setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name} (${fetched}/${total} conversations)...`, '');
-      });
-
-      if (conversations.length === 0) {
-        throw new Error('failed to fetch any conversations');
-      }
-
-      const folderName = `${sanitizeFilename(project.name)}_${project.uuid.substring(0, 8)}`;
-      await buildProjectZip(zip, folderName, project.uuid, conversations, projectMetadata);
-
-      succeeded.push(project.name);
-    } catch (error) {
-      failed.push({ name: project.name, reason: error.message });
+  try {
+    setStatus('Resolving organization ID...', '');
+    const orgId = await getOrganizationId();
+    if (!orgId) {
+      setStatus('Batch export failed: could not find your organization ID. Make sure you are logged into claude.ai.', 'error');
+      return;
     }
-  }
 
-  if (succeeded.length === 0) {
-    setStatus(`Batch export failed: all ${projects.length} project(s) failed. ${failed.map(f => `${f.name}: ${f.reason}`).join('; ')}`, 'error');
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tab.id;
+
+    const zip = new JSZip();
+    const succeeded = [];
+    const failed = [];
+
+    for (let i = 0; i < projects.length; i++) {
+      const project = projects[i];
+      setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name}...`, '');
+
+      try {
+        await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${project.uuid}` });
+
+        const ready = await waitForContentScriptReady(tabId, 15000, `/project/${project.uuid}`);
+        if (!ready) {
+          throw new Error('page did not finish loading in time');
+        }
+
+        const conversationsList = await fetchConversationsList(orgId, project.uuid);
+        if (!conversationsList || conversationsList.length === 0) {
+          throw new Error('no conversations found');
+        }
+
+        let projectMetadata = { memory: null, instructions: null };
+        try {
+          const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_METADATA' });
+          if (response) {
+            projectMetadata = response;
+          }
+        } catch (e) {
+          // Proceed without memory/instructions for this project.
+        }
+
+        const conversations = await fetchAllConversations(orgId, conversationsList, (fetched, total) => {
+          setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name} (${fetched}/${total} conversations)...`, '');
+        });
+
+        if (conversations.length === 0) {
+          throw new Error('failed to fetch any conversations');
+        }
+
+        const folderName = `${sanitizeFilename(project.name)}_${project.uuid.substring(0, 8)}`;
+        await buildProjectZip(zip, folderName, project.uuid, conversations, projectMetadata);
+
+        succeeded.push(project.name);
+      } catch (error) {
+        failed.push({ name: project.name, reason: error.message });
+      }
+    }
+
+    if (succeeded.length === 0) {
+      setStatus(`Batch export failed: all ${projects.length} project(s) failed. ${failed.map(f => `${f.name}: ${f.reason}`).join('; ')}`, 'error');
+      return;
+    }
+
+    setStatus(`Building combined zip for ${succeeded.length} project(s)...`, '');
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const downloadFilename = `projects_batch_${succeeded.length}.zip`;
+
+    const url = URL.createObjectURL(blob);
+    chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
+      URL.revokeObjectURL(url);
+    });
+
+    let finalMessage = `✅ Batch export complete: ${succeeded.length}/${projects.length} project(s) exported.`;
+    if (failed.length > 0) {
+      finalMessage += ` Failed: ${failed.map(f => `${f.name} (${f.reason})`).join(', ')}.`;
+    }
+    setStatus(finalMessage, 'success');
+  } finally {
+    batchInProgress = false;
+    exportBtnDisabledForBatch(false);
     selectBtn.style.display = 'block';
-    return;
+    await detectContext();
   }
+}
 
-  setStatus(`Building combined zip for ${succeeded.length} project(s)...`, '');
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const downloadFilename = `projects_batch_${succeeded.length}.zip`;
-
-  const url = URL.createObjectURL(blob);
-  chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
-    URL.revokeObjectURL(url);
-  });
-
-  let finalMessage = `✅ Batch export complete: ${succeeded.length}/${projects.length} project(s) exported.`;
-  if (failed.length > 0) {
-    finalMessage += ` Failed: ${failed.map(f => `${f.name} (${f.reason})`).join(', ')}.`;
-  }
-  setStatus(finalMessage, 'success');
-  selectBtn.style.display = 'block';
+function exportBtnDisabledForBatch(disabled) {
+  document.getElementById('export-btn').disabled = disabled;
 }
 
 // The side panel is persistent (unlike the old popup, it doesn't reload on
