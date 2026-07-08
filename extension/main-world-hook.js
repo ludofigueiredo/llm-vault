@@ -5,12 +5,15 @@
 
   function installHook() {
     if (originalCreateObjectURL) return;
+    console.log('[claude-exporter] installing createObjectURL hook');
     originalCreateObjectURL = URL.createObjectURL.bind(URL);
     URL.createObjectURL = function (blob) {
+      console.log('[claude-exporter] createObjectURL called, armed:', armed, 'isBlob:', blob instanceof Blob);
       const result = originalCreateObjectURL(blob);
       if (armed && blob instanceof Blob) {
         armed = false;
         blob.arrayBuffer().then((buffer) => {
+          console.log('[claude-exporter] blob captured, size:', buffer.byteLength);
           window.postMessage({ source: MESSAGE_SOURCE, type: 'BLOB_CAPTURED', buffer }, '*');
         }).catch(() => {
           window.postMessage({ source: MESSAGE_SOURCE, type: 'BLOB_CAPTURE_FAILED' }, '*');
