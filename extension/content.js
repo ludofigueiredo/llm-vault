@@ -50,6 +50,10 @@ function findFilesToggleButton() {
   return document.querySelector('[aria-label="Fichiers"]');
 }
 
+function isFilesSidebarOpen(toggleButton) {
+  return toggleButton.getAttribute('aria-pressed') === 'true';
+}
+
 function findArtefactsHeading() {
   const headings = document.querySelectorAll('h3');
   for (const heading of headings) {
@@ -106,17 +110,18 @@ async function captureArtifactsZip() {
   const toggleButton = findFilesToggleButton();
   if (!toggleButton) return null;
 
-  toggleButton.click();
+  const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
+  if (!wasAlreadyOpen) toggleButton.click();
 
   const artefactsHeading = await waitForCondition(findArtefactsHeading, 3000, 150);
   if (!artefactsHeading) {
-    toggleButton.click();
+    if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
 
   const downloadButton = findDownloadAllButton(artefactsHeading);
   if (!downloadButton) {
-    toggleButton.click();
+    if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
 
@@ -124,7 +129,7 @@ async function captureArtifactsZip() {
   downloadButton.click();
   const buffer = await waitForBlobCapture(10000);
 
-  toggleButton.click();
+  if (!wasAlreadyOpen) toggleButton.click();
   return buffer;
 }
 
