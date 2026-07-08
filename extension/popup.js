@@ -66,6 +66,7 @@ async function runExport() {
       }
 
       let projectMetadata = { memory: null, instructions: null };
+      let contentScriptUnreachable = false;
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PROJECT_METADATA' });
@@ -73,7 +74,9 @@ async function runExport() {
           projectMetadata = response;
         }
       } catch (e) {
-        // Content script not present/responsive — proceed without memory/instructions.
+        // Content script not present/responsive (e.g. the page was open before the
+        // extension was installed/reloaded) — proceed without memory/instructions.
+        contentScriptUnreachable = true;
       }
 
       const conversations = await fetchAllConversations(orgId, conversationsList, (fetched, total) => {
@@ -88,12 +91,17 @@ async function runExport() {
       blob = await buildProjectZip(exportProjectId, conversations, projectMetadata);
       downloadFilename = `project_${exportProjectId.substring(0, 8)}.zip`;
 
+      let projectStatusMessage;
       if (conversations.length < conversationsList.length) {
         const failedCount = conversationsList.length - conversations.length;
-        setStatus(`✅ Exported ${conversations.length}/${conversationsList.length} conversations (${failedCount} failed to fetch).`, 'success');
+        projectStatusMessage = `✅ Exported ${conversations.length}/${conversationsList.length} conversations (${failedCount} failed to fetch).`;
       } else {
-        setStatus(`✅ Exported ${conversations.length} conversations.`, 'success');
+        projectStatusMessage = `✅ Exported ${conversations.length} conversations.`;
       }
+      if (contentScriptUnreachable) {
+        projectStatusMessage += ' ⚠️ Could not capture memory/instructions — refresh the project page and try again to include them.';
+      }
+      setStatus(projectStatusMessage, 'success');
     } else if (exportMode === 'conversation') {
       setStatus('Fetching conversation...', '');
       const data = await fetchConversation(orgId, exportConversationId);
@@ -104,6 +112,7 @@ async function runExport() {
       const conversation = { metadata: { name: data.name, uuid: data.uuid, created_at: data.created_at, updated_at: data.updated_at, model: data.model }, data };
 
       let artifactsData = { artifactsZip: null, contentFiles: [] };
+      let contentScriptUnreachable = false;
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         setStatus('Capturing artifacts and content files...', '');
@@ -112,13 +121,20 @@ async function runExport() {
           artifactsData = response;
         }
       } catch (e) {
-        // Content script not present/responsive — proceed without artifacts/content.
+        // Content script not present/responsive (e.g. the page was open before the
+        // extension was installed/reloaded) — proceed without artifacts/content.
+        contentScriptUnreachable = true;
       }
 
       setStatus('Building zip...', '');
       blob = await buildConversationZip(conversation, artifactsData);
       downloadFilename = `${conversationFolderName(conversation)}.zip`;
-      setStatus('✅ Exported conversation.', 'success');
+
+      let conversationStatusMessage = '✅ Exported conversation.';
+      if (contentScriptUnreachable) {
+        conversationStatusMessage += ' ⚠️ Could not capture artifacts/content — refresh the conversation page and try again to include them.';
+      }
+      setStatus(conversationStatusMessage, 'success');
     } else {
       throw new Error('No project or conversation detected.');
     }
