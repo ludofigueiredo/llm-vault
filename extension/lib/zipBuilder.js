@@ -41,24 +41,23 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
   }
 }
 
-async function buildProjectZip(projectId, conversations, projectMetadata) {
-  const zip = new JSZip();
-  zip.file('index.md', createIndexMarkdown(projectId, conversations));
+async function buildProjectZip(zip, folderPath, projectId, conversations, projectMetadata) {
+  const target = folderPath ? zip.folder(folderPath) : zip;
+
+  target.file('index.md', createIndexMarkdown(projectId, conversations));
 
   if (projectMetadata && projectMetadata.memory) {
-    zip.file('memory.md', projectMetadata.memory);
+    target.file('memory.md', projectMetadata.memory);
   }
   if (projectMetadata && projectMetadata.instructions) {
-    zip.file('instructions.md', projectMetadata.instructions);
+    target.file('instructions.md', projectMetadata.instructions);
   }
-  zip.folder('fichiers').file('.gitkeep', '');
+  target.folder('fichiers').file('.gitkeep', '');
 
   for (const conv of conversations) {
     const folderName = conversationFolderName(conv);
-    await buildConversationFolder(zip, folderName, conv);
+    await buildConversationFolder(target, folderName, conv);
   }
-
-  return zip.generateAsync({ type: 'blob' });
 }
 
 async function buildConversationZip(conversation, artifactsData) {

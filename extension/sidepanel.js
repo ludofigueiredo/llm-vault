@@ -101,7 +101,9 @@ async function runExport() {
       }
 
       setStatus(`Building zip for ${conversations.length} conversations...`, '');
-      blob = await buildProjectZip(exportProjectId, conversations, projectMetadata);
+      const projectZip = new JSZip();
+      await buildProjectZip(projectZip, '', exportProjectId, conversations, projectMetadata);
+      blob = await projectZip.generateAsync({ type: 'blob' });
       downloadFilename = `project_${exportProjectId.substring(0, 8)}.zip`;
 
       let projectStatusMessage;
