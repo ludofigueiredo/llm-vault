@@ -58,12 +58,16 @@ function findArtefactsHeading() {
   return null;
 }
 
+function normalizeWhitespace(text) {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 function findDownloadAllButton(artefactsHeading) {
   let container = artefactsHeading.parentElement;
   for (let i = 0; i < 5 && container; i++) {
     const buttons = container.querySelectorAll('button');
     for (const button of buttons) {
-      if (button.textContent.includes('Tout télécharger')) return button;
+      if (normalizeWhitespace(button.textContent).includes('Tout télécharger')) return button;
     }
     container = container.parentElement;
   }
@@ -150,10 +154,69 @@ function scrapeContentFiles() {
   return files;
 }
 
+function findNonImageThumbnailButtons() {
+  const section = findContenuSection();
+  if (!section) return [];
+
+  const buttons = [];
+  const wrappers = section.querySelectorAll('[data-testid="file-thumbnail"]');
+  wrappers.forEach((wrapper) => {
+    const button = wrapper.querySelector('button');
+    const heading = wrapper.querySelector('h3');
+    if (!button || !heading) return;
+    const filename = heading.textContent.trim();
+    if (!filename) return;
+    buttons.push({ button, filename });
+  });
+  return buttons;
+}
+
+function findPreviewDownloadButton() {
+  const buttons = document.querySelectorAll('button');
+  for (const button of buttons) {
+    if (normalizeWhitespace(button.textContent) === 'Télécharger') return button;
+  }
+  return null;
+}
+
+function findPreviewCloseButton() {
+  return document.querySelector('[aria-label="Fermer"]');
+}
+
+async function captureNonImageContentFile(entry) {
+  entry.button.click();
+
+  const downloadButton = await waitForCondition(findPreviewDownloadButton, 3000, 150);
+  if (!downloadButton) {
+    const closeButton = findPreviewCloseButton();
+    if (closeButton) closeButton.click();
+    return null;
+  }
+
+  window.postMessage({ source: CAPTURE_MESSAGE_SOURCE, type: 'ARM_CAPTURE' }, '*');
+  downloadButton.click();
+  const buffer = await waitForBlobCapture(10000);
+
+  const closeButton = findPreviewCloseButton();
+  if (closeButton) closeButton.click();
+  return buffer;
+}
+
+async function captureNonImageContentFiles() {
+  const entries = findNonImageThumbnailButtons();
+  const results = [];
+  for (const entry of entries) {
+    const buffer = await captureNonImageContentFile(entry);
+    if (buffer) results.push({ filename: entry.filename, buffer });
+  }
+  return results;
+}
+
 async function getConversationArtifacts() {
   const artifactsZip = await captureArtifactsZip();
   const contentFiles = scrapeContentFiles();
-  return { artifactsZip, contentFiles };
+  const nonImageContentFiles = await captureNonImageContentFiles();
+  return { artifactsZip, contentFiles, nonImageContentFiles };
 }
 
 let selectedProjectUuids = new Set();

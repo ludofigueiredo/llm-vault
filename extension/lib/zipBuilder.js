@@ -20,23 +20,27 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
 
   const contenuFolder = folder.folder('contenu');
   const contentFiles = (artifactsData && artifactsData.contentFiles) || [];
-  if (contentFiles.length > 0) {
-    let anySucceeded = false;
-    for (const file of contentFiles) {
-      try {
-        const response = await fetch(file.url, { credentials: 'include' });
-        if (!response.ok) continue;
-        const buffer = await response.arrayBuffer();
-        contenuFolder.file(file.filename, buffer);
-        anySucceeded = true;
-      } catch (e) {
-        // Skip this file, continue with the rest.
-      }
+  const nonImageContentFiles = (artifactsData && artifactsData.nonImageContentFiles) || [];
+  let anySucceeded = false;
+
+  for (const file of contentFiles) {
+    try {
+      const response = await fetch(file.url, { credentials: 'include' });
+      if (!response.ok) continue;
+      const buffer = await response.arrayBuffer();
+      contenuFolder.file(file.filename, buffer);
+      anySucceeded = true;
+    } catch (e) {
+      // Skip this file, continue with the rest.
     }
-    if (!anySucceeded) {
-      contenuFolder.file('.gitkeep', '');
-    }
-  } else {
+  }
+
+  for (const file of nonImageContentFiles) {
+    contenuFolder.file(file.filename, file.buffer);
+    anySucceeded = true;
+  }
+
+  if (!anySucceeded) {
     contenuFolder.file('.gitkeep', '');
   }
 }
