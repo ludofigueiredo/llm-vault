@@ -1,6 +1,17 @@
 let exportMode = null; // 'project' | 'conversation' | null
 let exportProjectId = null;
 let exportConversationId = null;
+let selectionMode = false;
+let selectedProjects = [];
+
+function isProjectsListingUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'claude.ai' && parsed.pathname === '/projects';
+  } catch (e) {
+    return false;
+  }
+}
 
 async function detectContext() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -8,6 +19,14 @@ async function detectContext() {
 
   const contextMessage = document.getElementById('context-message');
   const exportBtn = document.getElementById('export-btn');
+  const selectProjectsBtn = document.getElementById('select-projects-btn');
+  const confirmSelectionBtn = document.getElementById('confirm-selection-btn');
+
+  if (selectionMode) {
+    // Don't clobber the selection-mode UI while a selection is in progress —
+    // context re-detection from tab-switch listeners must not interrupt it.
+    return;
+  }
 
   const projectId = getProjectIdFromUrl(url);
   const conversationId = getConversationIdFromUrl(url);
@@ -18,16 +37,28 @@ async function detectContext() {
     contextMessage.textContent = 'Claude Project detected.';
     exportBtn.textContent = 'Export Project';
     exportBtn.style.display = 'block';
+    selectProjectsBtn.style.display = 'none';
+    confirmSelectionBtn.style.display = 'none';
   } else if (conversationId) {
     exportMode = 'conversation';
     exportConversationId = conversationId;
     contextMessage.textContent = 'Claude Conversation detected.';
     exportBtn.textContent = 'Export Conversation';
     exportBtn.style.display = 'block';
+    selectProjectsBtn.style.display = 'none';
+    confirmSelectionBtn.style.display = 'none';
+  } else if (isProjectsListingUrl(url)) {
+    exportMode = null;
+    contextMessage.textContent = 'Claude Projects list detected.';
+    exportBtn.style.display = 'none';
+    selectProjectsBtn.style.display = 'block';
+    confirmSelectionBtn.style.display = 'none';
   } else {
     exportMode = null;
     contextMessage.textContent = 'Navigate to a Claude project (claude.ai/project/...) or conversation (claude.ai/chat/...) page to export it.';
     exportBtn.style.display = 'none';
+    selectProjectsBtn.style.display = 'none';
+    confirmSelectionBtn.style.display = 'none';
   }
 }
 
@@ -42,7 +73,94 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('export-btn').addEventListener('click', () => {
     runExport();
   });
+  document.getElementById('select-projects-btn').addEventListener('click', () => {
+    enterSelectionMode();
+  });
+  document.getElementById('confirm-selection-btn').addEventListener('click', () => {
+    confirmSelection();
+  });
 });
+
+async function enterSelectionMode() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_SELECTION_MODE' });
+    if (!response || !response.armed) {
+      setStatus('Could not start selection mode — the project list was not found on this page.', 'error');
+      return;
+    }
+  } catch (e) {
+    setStatus('Could not start selection mode — try refreshing the page and reopening the panel.', 'error');
+    return;
+  }
+
+  selectionMode = true;
+  document.getElementById('select-projects-btn').style.display = 'none';
+  document.getElementById('confirm-selection-btn').style.display = 'block';
+  document.getElementById('confirm-selection-btn').textContent = 'Confirm Selection (0)';
+  document.getElementById('context-message').textContent = 'Click project cards to select them, then click Confirm.';
+  pollSelectionCount();
+}
+
+let selectionPollTimer = null;
+
+function pollSelectionCount() {
+  if (selectionPollTimer) clearInterval(selectionPollTimer);
+  selectionPollTimer = setInterval(async () => {
+    if (!selectionMode) {
+      clearInterval(selectionPollTimer);
+      return;
+    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      const projects = await chrome.tabs.sendMessage(tab.id, { type: 'GET_SELECTED_PROJECTS' });
+      const count = Array.isArray(projects) ? projects.length : 0;
+      document.getElementById('confirm-selection-btn').textContent = `Confirm Selection (${count})`;
+    } catch (e) {
+      // Content script not reachable (e.g. user navigated away) — leave the
+      // last known count displayed rather than erroring the panel.
+    }
+  }, 500);
+}
+
+async function confirmSelection() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  let projects = [];
+  try {
+    projects = await chrome.tabs.sendMessage(tab.id, { type: 'GET_SELECTED_PROJECTS' });
+  } catch (e) {
+    projects = [];
+  }
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'STOP_SELECTION_MODE' });
+  } catch (e) {
+    // Best-effort cleanup — if this fails, the visual borders may linger on
+    // the page until the next reload, but the batch itself is unaffected.
+  }
+
+  if (selectionPollTimer) {
+    clearInterval(selectionPollTimer);
+    selectionPollTimer = null;
+  }
+
+  selectionMode = false;
+  document.getElementById('confirm-selection-btn').style.display = 'none';
+
+  if (!Array.isArray(projects) || projects.length === 0) {
+    setStatus('No projects were selected.', 'error');
+    detectContext();
+    return;
+  }
+
+  selectedProjects = projects;
+  await startBatchExport(selectedProjects);
+}
+
+async function startBatchExport(projects) {
+  setStatus(`Batch export not yet implemented (would process ${projects.length} project(s)).`, 'error');
+}
 
 // The side panel is persistent (unlike the old popup, it doesn't reload on
 // every open), so context must be re-detected whenever the active tab
