@@ -142,23 +142,28 @@ function waitForBlobCapture(timeoutMs) {
 
 async function captureArtifactsZip() {
   const toggleButton = findFilesToggleButton();
+  console.log('[claude-exporter][artefacts] toggleButton found:', !!toggleButton);
   if (!toggleButton) return null;
 
   const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
+  console.log('[claude-exporter][artefacts] wasAlreadyOpen:', wasAlreadyOpen);
   if (!wasAlreadyOpen) toggleButton.click();
 
   const artefactsHeading = await waitForCondition(findArtefactsHeading, 3000, 150);
+  console.log('[claude-exporter][artefacts] artefactsHeading found:', !!artefactsHeading);
   if (!artefactsHeading) {
     if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
 
   let downloadButton = findDownloadAllButton(artefactsHeading);
+  console.log('[claude-exporter][artefacts] "Tout télécharger" button found:', !!downloadButton);
   let singleArtifactFilename = null;
   if (!downloadButton) {
     // "Tout télécharger" only renders when there is more than one artifact —
     // with exactly one, fall back to that artifact's own download button.
     downloadButton = findSingleArtifactDownloadButton(artefactsHeading);
+    console.log('[claude-exporter][artefacts] single-artifact button found:', !!downloadButton, downloadButton ? downloadButton.getAttribute('aria-label') : null);
     if (downloadButton) {
       const label = downloadButton.getAttribute('aria-label') || '';
       singleArtifactFilename = label.replace(/^Télécharger\s+/, '').trim() || null;
@@ -170,12 +175,15 @@ async function captureArtifactsZip() {
   }
 
   const armed = await armCaptureAndWait(2000);
+  console.log('[claude-exporter][artefacts] hook armed (ack received):', armed);
   if (!armed) {
     if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
   downloadButton.click();
+  console.log('[claude-exporter][artefacts] clicked download button, waiting for blob (10s timeout)...');
   const buffer = await waitForBlobCapture(10000);
+  console.log('[claude-exporter][artefacts] blob captured:', !!buffer, buffer ? buffer.byteLength : 0, 'filename:', singleArtifactFilename);
 
   if (!wasAlreadyOpen) toggleButton.click();
   return { buffer, singleArtifactFilename };
