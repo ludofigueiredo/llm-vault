@@ -269,5 +269,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ stopped: true });
     return false;
   }
+  if (message && message.type === 'PING') {
+    sendResponse({ pong: true });
+    return false;
+  }
   return false;
 });

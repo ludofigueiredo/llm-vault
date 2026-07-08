@@ -68,6 +68,29 @@ function setStatus(message, kind) {
   status.className = kind || '';
 }
 
+function waitForContentScriptReady(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const attempt = async () => {
+      try {
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+        if (response && response.pong) {
+          resolve(true);
+          return;
+        }
+      } catch (e) {
+        // Not ready yet — content script hasn't injected on the new page.
+      }
+      if (Date.now() - start >= timeoutMs) {
+        resolve(false);
+        return;
+      }
+      setTimeout(attempt, 200);
+    };
+    attempt();
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   detectContext();
   document.getElementById('export-btn').addEventListener('click', () => {
