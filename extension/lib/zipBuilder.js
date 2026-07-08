@@ -3,25 +3,34 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
   folder.file('conversation.md', convertToMarkdown(conversation));
 
   const artefactsFolder = folder.folder('artefacts');
+  let artefactsWritten = false;
+
   if (artifactsData && artifactsData.artifactsZip) {
+    const artifactsZipInstance = await JSZip.loadAsync(artifactsData.artifactsZip);
+    const entries = [];
+    artifactsZipInstance.forEach((relativePath, entry) => {
+      entries.push({ relativePath, entry });
+    });
+    for (const { relativePath, entry } of entries) {
+      if (entry.dir) continue;
+      const content = await entry.async('arraybuffer');
+      artefactsFolder.file(relativePath, content);
+    }
+    artefactsWritten = true;
+  } else if (artifactsData && artifactsData.singleArtifactUrl && artifactsData.singleArtifactFilename) {
     try {
-      const artifactsZipInstance = await JSZip.loadAsync(artifactsData.artifactsZip);
-      const entries = [];
-      artifactsZipInstance.forEach((relativePath, entry) => {
-        entries.push({ relativePath, entry });
-      });
-      for (const { relativePath, entry } of entries) {
-        if (entry.dir) continue;
-        const content = await entry.async('arraybuffer');
-        artefactsFolder.file(relativePath, content);
+      const response = await fetch(artifactsData.singleArtifactUrl, { credentials: 'include' });
+      if (response.ok) {
+        const content = await response.arrayBuffer();
+        artefactsFolder.file(artifactsData.singleArtifactFilename, content);
+        artefactsWritten = true;
       }
     } catch (e) {
-      // A single artifact downloads as the file itself (e.g. .html), not a
-      // zip - loadAsync rejects on non-zip data, so write it directly.
-      const filename = artifactsData.singleArtifactFilename || 'artefact';
-      artefactsFolder.file(filename, artifactsData.artifactsZip);
+      // Guessed filename was wrong or the request failed — leave artefacts/ empty.
     }
-  } else {
+  }
+
+  if (!artefactsWritten) {
     artefactsFolder.file('.gitkeep', '');
   }
 

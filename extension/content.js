@@ -88,6 +88,33 @@ function findSingleArtifactDownloadButton(artefactsHeading) {
   return null;
 }
 
+const ARTIFACT_TYPE_EXTENSIONS = {
+  HTML: 'html',
+  SVG: 'svg',
+  CODE: 'txt',
+  MARKDOWN: 'md',
+  JSON: 'json',
+  PYTHON: 'py',
+  JAVASCRIPT: 'js',
+  CSV: 'csv',
+  ZIP: 'zip'
+};
+
+function guessArtifactFilename(downloadButton, artifactTitle) {
+  const artifactBlock = downloadButton.closest('.group\\/artifact-block');
+  const typeLine = artifactBlock ? artifactBlock.querySelector('.text-xs.line-clamp-1') : null;
+  const typeText = typeLine ? normalizeWhitespace(typeLine.textContent).toUpperCase() : '';
+  let extension = 'txt';
+  for (const [key, ext] of Object.entries(ARTIFACT_TYPE_EXTENSIONS)) {
+    if (typeText.includes(key)) {
+      extension = ext;
+      break;
+    }
+  }
+  const slug = artifactTitle.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return slug ? `${slug}.${extension}` : null;
+}
+
 function armCaptureAndWait(timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
@@ -142,51 +169,53 @@ function waitForBlobCapture(timeoutMs) {
 
 async function captureArtifactsZip() {
   const toggleButton = findFilesToggleButton();
-  console.log('[claude-exporter][artefacts] toggleButton found:', !!toggleButton);
   if (!toggleButton) return null;
 
   const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
-  console.log('[claude-exporter][artefacts] wasAlreadyOpen:', wasAlreadyOpen);
   if (!wasAlreadyOpen) toggleButton.click();
 
   const artefactsHeading = await waitForCondition(findArtefactsHeading, 3000, 150);
-  console.log('[claude-exporter][artefacts] artefactsHeading found:', !!artefactsHeading);
   if (!artefactsHeading) {
     if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
 
-  let downloadButton = findDownloadAllButton(artefactsHeading);
-  console.log('[claude-exporter][artefacts] "Tout télécharger" button found:', !!downloadButton);
-  let singleArtifactFilename = null;
-  if (!downloadButton) {
-    // "Tout télécharger" only renders when there is more than one artifact —
-    // with exactly one, fall back to that artifact's own download button.
-    downloadButton = findSingleArtifactDownloadButton(artefactsHeading);
-    console.log('[claude-exporter][artefacts] single-artifact button found:', !!downloadButton, downloadButton ? downloadButton.getAttribute('aria-label') : null);
-    if (downloadButton) {
-      const label = downloadButton.getAttribute('aria-label') || '';
-      singleArtifactFilename = label.replace(/^Télécharger\s+/, '').trim() || null;
+  const downloadButton = findDownloadAllButton(artefactsHeading);
+  if (downloadButton) {
+    // "Tout télécharger" bundles multiple artifacts into a zip generated
+    // client-side (confirmed: this path really does call createObjectURL,
+    // unlike a single artifact's own download button — see below), so Blob
+    // capture via the MAIN-world hook is the right mechanism here.
+    const armed = await armCaptureAndWait(2000);
+    if (!armed) {
+      if (!wasAlreadyOpen) toggleButton.click();
+      return null;
     }
-  }
-  if (!downloadButton) {
+    downloadButton.click();
+    const buffer = await waitForBlobCapture(10000);
     if (!wasAlreadyOpen) toggleButton.click();
-    return null;
+    return { buffer, singleArtifactFilename: null };
   }
 
-  const armed = await armCaptureAndWait(2000);
-  console.log('[claude-exporter][artefacts] hook armed (ack received):', armed);
-  if (!armed) {
-    if (!wasAlreadyOpen) toggleButton.click();
-    return null;
-  }
-  downloadButton.click();
-  console.log('[claude-exporter][artefacts] clicked download button, waiting for blob (10s timeout)...');
-  const buffer = await waitForBlobCapture(10000);
-  console.log('[claude-exporter][artefacts] blob captured:', !!buffer, buffer ? buffer.byteLength : 0, 'filename:', singleArtifactFilename);
-
+  // With exactly one artifact, claude.ai renders no "Tout télécharger"
+  // button — only that artifact's own "Télécharger <name>" button, which
+  // (confirmed via a live Network capture) downloads via a real GET
+  // navigation to .../wiggle/download-file?path=..., never calling
+  // createObjectURL. The card only shows a "humanized" title (e.g. "Kyc
+  // pipeline dashboard"), not the real filename on disk (e.g.
+  // "kyc_pipeline_dashboard.html") — guess the on-disk filename from the
+  // title + the card's type badge (best effort; the caller falls back to
+  // an empty artefacts/ folder if the guess is wrong and the fetch fails).
+  const singleButton = findSingleArtifactDownloadButton(artefactsHeading);
   if (!wasAlreadyOpen) toggleButton.click();
-  return { buffer, singleArtifactFilename };
+  if (!singleButton) return null;
+
+  const label = singleButton.getAttribute('aria-label') || '';
+  const artifactTitle = label.replace(/^Télécharger\s+/, '').trim();
+  if (!artifactTitle) return null;
+
+  const guessedFilename = guessArtifactFilename(singleButton, artifactTitle);
+  return { buffer: null, singleArtifactFilename: guessedFilename };
 }
 
 function findContenuSection() {

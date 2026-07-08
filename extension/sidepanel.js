@@ -388,6 +388,14 @@ async function runExport() {
             url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/uploads/' + filename)}`
           }));
           artifactsData.contentFiles = [...(artifactsData.contentFiles || []), ...nonImageUrls];
+
+          if (response.singleArtifactFilename) {
+            // A conversation with exactly one artifact has no client-side
+            // zip Blob to capture — the artifact's filename was guessed
+            // from its card title/type badge, so this fetch may 404 if the
+            // guess is wrong (buildConversationZip skips it gracefully).
+            artifactsData.singleArtifactUrl = `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/outputs/' + response.singleArtifactFilename)}`;
+          }
         }
       } catch (e) {
         // Content script not present/responsive (e.g. the page was open before the
