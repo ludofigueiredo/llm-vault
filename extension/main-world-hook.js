@@ -28,6 +28,7 @@
     if (data.type === 'ARM_CAPTURE') {
       installHook();
       armed = true;
+      window.postMessage({ source: MESSAGE_SOURCE, type: 'ARM_CAPTURE_ACK' }, '*');
     } else if (data.type === 'DISARM_CAPTURE') {
       armed = false;
     }

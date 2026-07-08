@@ -78,6 +78,30 @@ function findDownloadAllButton(artefactsHeading) {
   return null;
 }
 
+function armCaptureAndWait(timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const listener = (event) => {
+      if (event.source !== window) return;
+      const data = event.data;
+      if (!data || data.source !== CAPTURE_MESSAGE_SOURCE) return;
+      if (data.type === 'ARM_CAPTURE_ACK') {
+        settled = true;
+        window.removeEventListener('message', listener);
+        resolve(true);
+      }
+    };
+    window.addEventListener('message', listener);
+    window.postMessage({ source: CAPTURE_MESSAGE_SOURCE, type: 'ARM_CAPTURE' }, '*');
+    setTimeout(() => {
+      if (!settled) {
+        window.removeEventListener('message', listener);
+        resolve(false);
+      }
+    }, timeoutMs);
+  });
+}
+
 function waitForBlobCapture(timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
@@ -125,7 +149,11 @@ async function captureArtifactsZip() {
     return null;
   }
 
-  window.postMessage({ source: CAPTURE_MESSAGE_SOURCE, type: 'ARM_CAPTURE' }, '*');
+  const armed = await armCaptureAndWait(2000);
+  if (!armed) {
+    if (!wasAlreadyOpen) toggleButton.click();
+    return null;
+  }
   downloadButton.click();
   const buffer = await waitForBlobCapture(10000);
 
@@ -198,7 +226,12 @@ async function captureNonImageContentFile(entry) {
     return null;
   }
 
-  window.postMessage({ source: CAPTURE_MESSAGE_SOURCE, type: 'ARM_CAPTURE' }, '*');
+  const armed = await armCaptureAndWait(2000);
+  if (!armed) {
+    const closeButton = findPreviewCloseButton();
+    if (closeButton) closeButton.click();
+    return null;
+  }
   downloadButton.click();
   const buffer = await waitForBlobCapture(10000);
 
