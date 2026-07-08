@@ -70,10 +70,19 @@ function findDownloadAllButton(artefactsHeading) {
   let container = artefactsHeading.parentElement;
   for (let i = 0; i < 5 && container; i++) {
     const buttons = container.querySelectorAll('button');
-    console.log('[claude-exporter] findDownloadAllButton level', i, 'button texts:', [...buttons].map(b => JSON.stringify(normalizeWhitespace(b.textContent))));
     for (const button of buttons) {
       if (normalizeWhitespace(button.textContent).includes('Tout télécharger')) return button;
     }
+    container = container.parentElement;
+  }
+  return null;
+}
+
+function findSingleArtifactDownloadButton(artefactsHeading) {
+  let container = artefactsHeading.parentElement;
+  for (let i = 0; i < 5 && container; i++) {
+    const button = container.querySelector('button[aria-label^="Télécharger "]');
+    if (button) return button;
     container = container.parentElement;
   }
   return null;
@@ -133,40 +142,43 @@ function waitForBlobCapture(timeoutMs) {
 
 async function captureArtifactsZip() {
   const toggleButton = findFilesToggleButton();
-  console.log('[claude-exporter] toggleButton found:', !!toggleButton);
   if (!toggleButton) return null;
 
   const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
-  console.log('[claude-exporter] sidebar wasAlreadyOpen:', wasAlreadyOpen);
   if (!wasAlreadyOpen) toggleButton.click();
 
   const artefactsHeading = await waitForCondition(findArtefactsHeading, 3000, 150);
-  console.log('[claude-exporter] artefactsHeading found:', !!artefactsHeading);
   if (!artefactsHeading) {
     if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
 
-  const downloadButton = findDownloadAllButton(artefactsHeading);
-  console.log('[claude-exporter] downloadAllButton found:', !!downloadButton);
+  let downloadButton = findDownloadAllButton(artefactsHeading);
+  let singleArtifactFilename = null;
+  if (!downloadButton) {
+    // "Tout télécharger" only renders when there is more than one artifact —
+    // with exactly one, fall back to that artifact's own download button.
+    downloadButton = findSingleArtifactDownloadButton(artefactsHeading);
+    if (downloadButton) {
+      const label = downloadButton.getAttribute('aria-label') || '';
+      singleArtifactFilename = label.replace(/^Télécharger\s+/, '').trim() || null;
+    }
+  }
   if (!downloadButton) {
     if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
 
   const armed = await armCaptureAndWait(2000);
-  console.log('[claude-exporter] hook armed (ack received):', armed);
   if (!armed) {
     if (!wasAlreadyOpen) toggleButton.click();
     return null;
   }
   downloadButton.click();
-  console.log('[claude-exporter] clicked Tout télécharger, waiting for blob...');
   const buffer = await waitForBlobCapture(10000);
-  console.log('[claude-exporter] artifacts blob captured:', !!buffer, buffer ? buffer.byteLength : 0);
 
   if (!wasAlreadyOpen) toggleButton.click();
-  return buffer;
+  return { buffer, singleArtifactFilename };
 }
 
 function findContenuSection() {
@@ -267,10 +279,15 @@ async function captureNonImageContentFiles() {
 }
 
 async function getConversationArtifacts() {
-  const artifactsZip = await captureArtifactsZip();
+  const artifactsResult = await captureArtifactsZip();
   const contentFiles = scrapeContentFiles();
   const nonImageContentFiles = await captureNonImageContentFiles();
-  return { artifactsZip, contentFiles, nonImageContentFiles };
+  return {
+    artifactsZip: artifactsResult ? artifactsResult.buffer : null,
+    singleArtifactFilename: artifactsResult ? artifactsResult.singleArtifactFilename : null,
+    contentFiles,
+    nonImageContentFiles
+  };
 }
 
 let selectedProjectUuids = new Set();

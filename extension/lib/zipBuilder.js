@@ -4,15 +4,22 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
 
   const artefactsFolder = folder.folder('artefacts');
   if (artifactsData && artifactsData.artifactsZip) {
-    const artifactsZipInstance = await JSZip.loadAsync(artifactsData.artifactsZip);
-    const entries = [];
-    artifactsZipInstance.forEach((relativePath, entry) => {
-      entries.push({ relativePath, entry });
-    });
-    for (const { relativePath, entry } of entries) {
-      if (entry.dir) continue;
-      const content = await entry.async('arraybuffer');
-      artefactsFolder.file(relativePath, content);
+    try {
+      const artifactsZipInstance = await JSZip.loadAsync(artifactsData.artifactsZip);
+      const entries = [];
+      artifactsZipInstance.forEach((relativePath, entry) => {
+        entries.push({ relativePath, entry });
+      });
+      for (const { relativePath, entry } of entries) {
+        if (entry.dir) continue;
+        const content = await entry.async('arraybuffer');
+        artefactsFolder.file(relativePath, content);
+      }
+    } catch (e) {
+      // A single artifact downloads as the file itself (e.g. .html), not a
+      // zip - loadAsync rejects on non-zip data, so write it directly.
+      const filename = artifactsData.singleArtifactFilename || 'artefact';
+      artefactsFolder.file(filename, artifactsData.artifactsZip);
     }
   } else {
     artefactsFolder.file('.gitkeep', '');
