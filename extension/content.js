@@ -70,6 +70,7 @@ function findDownloadAllButton(artefactsHeading) {
   let container = artefactsHeading.parentElement;
   for (let i = 0; i < 5 && container; i++) {
     const buttons = container.querySelectorAll('button');
+    console.log('[claude-exporter] findDownloadAllButton level', i, 'button texts:', [...buttons].map(b => JSON.stringify(normalizeWhitespace(b.textContent))));
     for (const button of buttons) {
       if (normalizeWhitespace(button.textContent).includes('Tout télécharger')) return button;
     }
