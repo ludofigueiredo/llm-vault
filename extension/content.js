@@ -25,8 +25,6 @@ function getProjectMetadata() {
   };
 }
 
-const CAPTURE_MESSAGE_SOURCE = 'claude-exporter';
-
 function waitForCondition(checkFn, timeoutMs, intervalMs) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -66,26 +64,14 @@ function normalizeWhitespace(text) {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-function findDownloadAllButton(artefactsHeading) {
+function findArtifactDownloadButtons(artefactsHeading) {
   let container = artefactsHeading.parentElement;
   for (let i = 0; i < 5 && container; i++) {
-    const buttons = container.querySelectorAll('button');
-    for (const button of buttons) {
-      if (normalizeWhitespace(button.textContent).includes('Tout télécharger')) return button;
-    }
+    const buttons = container.querySelectorAll('button[aria-label^="Télécharger "]');
+    if (buttons.length > 0) return [...buttons];
     container = container.parentElement;
   }
-  return null;
-}
-
-function findSingleArtifactDownloadButton(artefactsHeading) {
-  let container = artefactsHeading.parentElement;
-  for (let i = 0; i < 5 && container; i++) {
-    const button = container.querySelector('button[aria-label^="Télécharger "]');
-    if (button) return button;
-    container = container.parentElement;
-  }
-  return null;
+  return [];
 }
 
 const ARTIFACT_TYPE_EXTENSIONS = {
@@ -115,61 +101,9 @@ function guessArtifactFilename(downloadButton, artifactTitle) {
   return slug ? `${slug}.${extension}` : null;
 }
 
-function armCaptureAndWait(timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const listener = (event) => {
-      if (event.source !== window) return;
-      const data = event.data;
-      if (!data || data.source !== CAPTURE_MESSAGE_SOURCE) return;
-      if (data.type === 'ARM_CAPTURE_ACK') {
-        settled = true;
-        window.removeEventListener('message', listener);
-        resolve(true);
-      }
-    };
-    window.addEventListener('message', listener);
-    window.postMessage({ source: CAPTURE_MESSAGE_SOURCE, type: 'ARM_CAPTURE' }, '*');
-    setTimeout(() => {
-      if (!settled) {
-        window.removeEventListener('message', listener);
-        resolve(false);
-      }
-    }, timeoutMs);
-  });
-}
-
-function waitForBlobCapture(timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const listener = (event) => {
-      if (event.source !== window) return;
-      const data = event.data;
-      if (!data || data.source !== CAPTURE_MESSAGE_SOURCE) return;
-      if (data.type === 'BLOB_CAPTURED') {
-        settled = true;
-        window.removeEventListener('message', listener);
-        resolve(data.buffer);
-      } else if (data.type === 'BLOB_CAPTURE_FAILED') {
-        settled = true;
-        window.removeEventListener('message', listener);
-        resolve(null);
-      }
-    };
-    window.addEventListener('message', listener);
-    setTimeout(() => {
-      if (!settled) {
-        window.removeEventListener('message', listener);
-        window.postMessage({ source: CAPTURE_MESSAGE_SOURCE, type: 'DISARM_CAPTURE' }, '*');
-        resolve(null);
-      }
-    }, timeoutMs);
-  });
-}
-
-async function captureArtifactsZip() {
+async function scrapeArtifactFilenames() {
   const toggleButton = findFilesToggleButton();
-  if (!toggleButton) return null;
+  if (!toggleButton) return [];
 
   const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
   if (!wasAlreadyOpen) toggleButton.click();
@@ -177,45 +111,30 @@ async function captureArtifactsZip() {
   const artefactsHeading = await waitForCondition(findArtefactsHeading, 3000, 150);
   if (!artefactsHeading) {
     if (!wasAlreadyOpen) toggleButton.click();
-    return null;
+    return [];
   }
 
-  const downloadButton = findDownloadAllButton(artefactsHeading);
-  if (downloadButton) {
-    // "Tout télécharger" bundles multiple artifacts into a zip generated
-    // client-side (confirmed: this path really does call createObjectURL,
-    // unlike a single artifact's own download button — see below), so Blob
-    // capture via the MAIN-world hook is the right mechanism here.
-    const armed = await armCaptureAndWait(2000);
-    if (!armed) {
-      if (!wasAlreadyOpen) toggleButton.click();
-      return null;
-    }
-    downloadButton.click();
-    const buffer = await waitForBlobCapture(10000);
-    if (!wasAlreadyOpen) toggleButton.click();
-    return { buffer, singleArtifactFilename: null };
-  }
-
-  // With exactly one artifact, claude.ai renders no "Tout télécharger"
-  // button — only that artifact's own "Télécharger <name>" button, which
-  // (confirmed via a live Network capture) downloads via a real GET
-  // navigation to .../wiggle/download-file?path=..., never calling
-  // createObjectURL. The card only shows a "humanized" title (e.g. "Kyc
-  // pipeline dashboard"), not the real filename on disk (e.g.
-  // "kyc_pipeline_dashboard.html") — guess the on-disk filename from the
-  // title + the card's type badge (best effort; the caller falls back to
-  // an empty artefacts/ folder if the guess is wrong and the fetch fails).
-  const singleButton = findSingleArtifactDownloadButton(artefactsHeading);
+  // Whether there's a "Tout télécharger" button (2+ artifacts) or just
+  // individual "Télécharger <name>" buttons (1 artifact), neither download
+  // calls createObjectURL — both hit the same wiggle/download-file(s)
+  // endpoint via a real GET navigation (confirmed via live Network
+  // captures for both cases). Each artifact card only shows a "humanized"
+  // title (e.g. "Keensight slide library v2"), not its real on-disk
+  // filename (e.g. "keensight_slide_library_v2.zip"), so guess it from the
+  // title + the card's type badge (best effort — the caller falls back to
+  // an empty artefacts/ folder for any artifact whose guessed URL 404s).
+  const buttons = findArtifactDownloadButtons(artefactsHeading);
   if (!wasAlreadyOpen) toggleButton.click();
-  if (!singleButton) return null;
 
-  const label = singleButton.getAttribute('aria-label') || '';
-  const artifactTitle = label.replace(/^Télécharger\s+/, '').trim();
-  if (!artifactTitle) return null;
-
-  const guessedFilename = guessArtifactFilename(singleButton, artifactTitle);
-  return { buffer: null, singleArtifactFilename: guessedFilename };
+  const filenames = [];
+  for (const button of buttons) {
+    const label = button.getAttribute('aria-label') || '';
+    const artifactTitle = label.replace(/^Télécharger\s+/, '').trim();
+    if (!artifactTitle) continue;
+    const guessedFilename = guessArtifactFilename(button, artifactTitle);
+    if (guessedFilename) filenames.push(guessedFilename);
+  }
+  return filenames;
 }
 
 function findContenuSection() {
@@ -261,12 +180,11 @@ function scrapeNonImageContentFilenames() {
 }
 
 async function getConversationArtifacts() {
-  const artifactsResult = await captureArtifactsZip();
+  const artifactFilenames = await scrapeArtifactFilenames();
   const contentFiles = scrapeContentFiles();
   const nonImageContentFilenames = scrapeNonImageContentFilenames();
   return {
-    artifactsZip: artifactsResult ? artifactsResult.buffer : null,
-    singleArtifactFilename: artifactsResult ? artifactsResult.singleArtifactFilename : null,
+    artifactFilenames,
     contentFiles,
     nonImageContentFilenames
   };

@@ -374,28 +374,33 @@ async function runExport() {
 
       const conversation = { metadata: { name: data.name, uuid: data.uuid, created_at: data.created_at, updated_at: data.updated_at, model: data.model }, data };
 
-      let artifactsData = { artifactsZip: null, contentFiles: [] };
+      let artifactsData = { artifactFiles: [], contentFiles: [] };
       let contentScriptUnreachable = false;
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         setStatus('Capturing artifacts and content files...', '');
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONVERSATION_ARTIFACTS' });
         if (response) {
-          artifactsData = response;
           const nonImageFilenames = response.nonImageContentFilenames || [];
           const nonImageUrls = nonImageFilenames.map((filename) => ({
             filename,
             url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/uploads/' + filename)}`
           }));
-          artifactsData.contentFiles = [...(artifactsData.contentFiles || []), ...nonImageUrls];
 
-          if (response.singleArtifactFilename) {
-            // A conversation with exactly one artifact has no client-side
-            // zip Blob to capture — the artifact's filename was guessed
-            // from its card title/type badge, so this fetch may 404 if the
-            // guess is wrong (buildConversationZip skips it gracefully).
-            artifactsData.singleArtifactUrl = `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/outputs/' + response.singleArtifactFilename)}`;
-          }
+          // Artifact filenames were guessed from each card's title/type
+          // badge (claude.ai never exposes the real on-disk name), so any
+          // of these fetches may 404 if a guess is wrong - buildConversationZip
+          // skips those individually rather than failing the export.
+          const artifactFilenames = response.artifactFilenames || [];
+          const artifactFiles = artifactFilenames.map((filename) => ({
+            filename,
+            url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/outputs/' + filename)}`
+          }));
+
+          artifactsData = {
+            artifactFiles,
+            contentFiles: [...(response.contentFiles || []), ...nonImageUrls]
+          };
         }
       } catch (e) {
         // Content script not present/responsive (e.g. the page was open before the

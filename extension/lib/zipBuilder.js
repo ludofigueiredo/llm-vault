@@ -1,58 +1,32 @@
-async function buildConversationFolder(zip, folderName, conversation, artifactsData) {
-  const folder = zip.folder(folderName);
-  folder.file('conversation.md', convertToMarkdown(conversation));
-
-  const artefactsFolder = folder.folder('artefacts');
-  let artefactsWritten = false;
-
-  if (artifactsData && artifactsData.artifactsZip) {
-    const artifactsZipInstance = await JSZip.loadAsync(artifactsData.artifactsZip);
-    const entries = [];
-    artifactsZipInstance.forEach((relativePath, entry) => {
-      entries.push({ relativePath, entry });
-    });
-    for (const { relativePath, entry } of entries) {
-      if (entry.dir) continue;
-      const content = await entry.async('arraybuffer');
-      artefactsFolder.file(relativePath, content);
-    }
-    artefactsWritten = true;
-  } else if (artifactsData && artifactsData.singleArtifactUrl && artifactsData.singleArtifactFilename) {
-    try {
-      const response = await fetch(artifactsData.singleArtifactUrl, { credentials: 'include' });
-      if (response.ok) {
-        const content = await response.arrayBuffer();
-        artefactsFolder.file(artifactsData.singleArtifactFilename, content);
-        artefactsWritten = true;
-      }
-    } catch (e) {
-      // Guessed filename was wrong or the request failed — leave artefacts/ empty.
-    }
-  }
-
-  if (!artefactsWritten) {
-    artefactsFolder.file('.gitkeep', '');
-  }
-
-  const contenuFolder = folder.folder('contenu');
-  const contentFiles = (artifactsData && artifactsData.contentFiles) || [];
+async function fetchFilesInto(folder, files) {
   let anySucceeded = false;
-
-  for (const file of contentFiles) {
+  for (const file of files) {
     try {
       const response = await fetch(file.url, { credentials: 'include' });
       if (!response.ok) continue;
       const buffer = await response.arrayBuffer();
-      contenuFolder.file(file.filename, buffer);
+      folder.file(file.filename, buffer);
       anySucceeded = true;
     } catch (e) {
       // Skip this file, continue with the rest.
     }
   }
-
   if (!anySucceeded) {
-    contenuFolder.file('.gitkeep', '');
+    folder.file('.gitkeep', '');
   }
+}
+
+async function buildConversationFolder(zip, folderName, conversation, artifactsData) {
+  const folder = zip.folder(folderName);
+  folder.file('conversation.md', convertToMarkdown(conversation));
+
+  const artefactsFolder = folder.folder('artefacts');
+  const artifactFiles = (artifactsData && artifactsData.artifactFiles) || [];
+  await fetchFilesInto(artefactsFolder, artifactFiles);
+
+  const contenuFolder = folder.folder('contenu');
+  const contentFiles = (artifactsData && artifactsData.contentFiles) || [];
+  await fetchFilesInto(contenuFolder, contentFiles);
 }
 
 async function buildProjectZip(zip, folderPath, projectId, conversations, projectMetadata) {
