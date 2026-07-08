@@ -156,6 +156,97 @@ async function getConversationArtifacts() {
   return { artifactsZip, contentFiles };
 }
 
+let selectionModeActive = false;
+let selectedProjectUuids = new Set();
+const SELECTED_BORDER_CLASS = 'claude-exporter-selected';
+let selectionClickListener = null;
+
+function ensureSelectionStyle() {
+  if (document.getElementById('claude-exporter-selection-style')) return;
+  const style = document.createElement('style');
+  style.id = 'claude-exporter-selection-style';
+  style.textContent = `.${SELECTED_BORDER_CLASS} { outline: 3px solid red !important; outline-offset: -3px; }`;
+  document.head.appendChild(style);
+}
+
+function findProjectListItems() {
+  const list = document.querySelector('ul[aria-label="Projets"]');
+  if (!list) return [];
+  return [...list.querySelectorAll('li')];
+}
+
+function getProjectInfoFromListItem(li) {
+  const link = li.querySelector('a[href^="/project/"]');
+  if (!link) return null;
+  const match = link.getAttribute('href').match(/\/project\/([a-f0-9-]{36})/);
+  if (!match) return null;
+  const nameEl = link.querySelector('.truncate');
+  const name = nameEl ? nameEl.textContent.trim() : match[1];
+  return { uuid: match[1], name, link };
+}
+
+function toggleProjectSelection(li) {
+  const info = getProjectInfoFromListItem(li);
+  if (!info) return;
+
+  if (selectedProjectUuids.has(info.uuid)) {
+    selectedProjectUuids.delete(info.uuid);
+    li.classList.remove(SELECTED_BORDER_CLASS);
+  } else {
+    selectedProjectUuids.add(info.uuid);
+    li.classList.add(SELECTED_BORDER_CLASS);
+  }
+}
+
+function handleSelectionClick(event) {
+  const li = event.target.closest('li');
+  if (!li) return;
+  const list = document.querySelector('ul[aria-label="Projets"]');
+  if (!list || !list.contains(li)) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  toggleProjectSelection(li);
+}
+
+function startSelectionMode() {
+  const list = document.querySelector('ul[aria-label="Projets"]');
+  if (!list) return false;
+
+  ensureSelectionStyle();
+  selectedProjectUuids = new Set();
+  selectionModeActive = true;
+  selectionClickListener = handleSelectionClick;
+  list.addEventListener('click', selectionClickListener, true);
+  return true;
+}
+
+function getSelectedProjects() {
+  const items = findProjectListItems();
+  const results = [];
+  for (const li of items) {
+    const info = getProjectInfoFromListItem(li);
+    if (info && selectedProjectUuids.has(info.uuid)) {
+      results.push({ uuid: info.uuid, name: info.name });
+    }
+  }
+  return results;
+}
+
+function stopSelectionMode() {
+  const list = document.querySelector('ul[aria-label="Projets"]');
+  if (list && selectionClickListener) {
+    list.removeEventListener('click', selectionClickListener, true);
+  }
+  selectionClickListener = null;
+  selectionModeActive = false;
+
+  for (const li of findProjectListItems()) {
+    li.classList.remove(SELECTED_BORDER_CLASS);
+  }
+  selectedProjectUuids = new Set();
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'GET_PROJECT_METADATA') {
     sendResponse(getProjectMetadata());
@@ -164,6 +255,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'GET_CONVERSATION_ARTIFACTS') {
     getConversationArtifacts().then(sendResponse);
     return true;
+  }
+  if (message && message.type === 'START_SELECTION_MODE') {
+    sendResponse({ armed: startSelectionMode() });
+    return false;
+  }
+  if (message && message.type === 'GET_SELECTED_PROJECTS') {
+    sendResponse(getSelectedProjects());
+    return false;
+  }
+  if (message && message.type === 'STOP_SELECTION_MODE') {
+    stopSelectionMode();
+    sendResponse({ stopped: true });
+    return false;
   }
   return false;
 });
