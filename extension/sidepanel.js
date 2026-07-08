@@ -382,6 +382,12 @@ async function runExport() {
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONVERSATION_ARTIFACTS' });
         if (response) {
           artifactsData = response;
+          const nonImageFilenames = response.nonImageContentFilenames || [];
+          const nonImageUrls = nonImageFilenames.map((filename) => ({
+            filename,
+            url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/uploads/' + filename)}`
+          }));
+          artifactsData.contentFiles = [...(artifactsData.contentFiles || []), ...nonImageUrls];
         }
       } catch (e) {
         // Content script not present/responsive (e.g. the page was open before the

@@ -207,86 +207,31 @@ function scrapeContentFiles() {
   return files;
 }
 
-function findNonImageThumbnailButtons() {
+function scrapeNonImageContentFilenames() {
   const section = findContenuSection();
-  console.log('[claude-exporter] Contenu section found:', !!section);
   if (!section) return [];
 
-  const buttons = [];
+  const filenames = [];
   const wrappers = section.querySelectorAll('[data-testid="file-thumbnail"]');
-  console.log('[claude-exporter] non-image file-thumbnail wrappers found:', wrappers.length);
   wrappers.forEach((wrapper) => {
-    const button = wrapper.querySelector('button');
     const heading = wrapper.querySelector('h3');
-    if (!button || !heading) return;
+    if (!heading) return;
     const filename = heading.textContent.trim();
     if (!filename) return;
-    buttons.push({ button, filename });
+    filenames.push(filename);
   });
-  console.log('[claude-exporter] non-image entries extracted:', buttons.map(b => b.filename));
-  return buttons;
-}
-
-function findPreviewDownloadButton() {
-  const buttons = document.querySelectorAll('button');
-  for (const button of buttons) {
-    if (normalizeWhitespace(button.textContent) === 'Télécharger') return button;
-  }
-  return null;
-}
-
-function findPreviewCloseButton() {
-  return document.querySelector('[aria-label="Fermer"]');
-}
-
-async function captureNonImageContentFile(entry) {
-  console.log('[claude-exporter] clicking non-image thumbnail:', entry.filename);
-  entry.button.click();
-
-  const downloadButton = await waitForCondition(findPreviewDownloadButton, 3000, 150);
-  console.log('[claude-exporter] preview download button found:', !!downloadButton);
-  if (!downloadButton) {
-    const closeButton = findPreviewCloseButton();
-    if (closeButton) closeButton.click();
-    return null;
-  }
-
-  const armed = await armCaptureAndWait(2000);
-  console.log('[claude-exporter] hook armed for', entry.filename, ':', armed);
-  if (!armed) {
-    const closeButton = findPreviewCloseButton();
-    if (closeButton) closeButton.click();
-    return null;
-  }
-  downloadButton.click();
-  console.log('[claude-exporter] clicked preview Télécharger, waiting for blob...');
-  const buffer = await waitForBlobCapture(10000);
-  console.log('[claude-exporter] blob captured for', entry.filename, ':', !!buffer, buffer ? buffer.byteLength : 0);
-
-  const closeButton = findPreviewCloseButton();
-  if (closeButton) closeButton.click();
-  return buffer;
-}
-
-async function captureNonImageContentFiles() {
-  const entries = findNonImageThumbnailButtons();
-  const results = [];
-  for (const entry of entries) {
-    const buffer = await captureNonImageContentFile(entry);
-    if (buffer) results.push({ filename: entry.filename, buffer });
-  }
-  return results;
+  return filenames;
 }
 
 async function getConversationArtifacts() {
   const artifactsResult = await captureArtifactsZip();
   const contentFiles = scrapeContentFiles();
-  const nonImageContentFiles = await captureNonImageContentFiles();
+  const nonImageContentFilenames = scrapeNonImageContentFilenames();
   return {
     artifactsZip: artifactsResult ? artifactsResult.buffer : null,
     singleArtifactFilename: artifactsResult ? artifactsResult.singleArtifactFilename : null,
     contentFiles,
-    nonImageContentFiles
+    nonImageContentFilenames
   };
 }
 

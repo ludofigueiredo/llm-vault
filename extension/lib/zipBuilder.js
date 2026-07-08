@@ -27,7 +27,6 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
 
   const contenuFolder = folder.folder('contenu');
   const contentFiles = (artifactsData && artifactsData.contentFiles) || [];
-  const nonImageContentFiles = (artifactsData && artifactsData.nonImageContentFiles) || [];
   let anySucceeded = false;
 
   for (const file of contentFiles) {
@@ -40,11 +39,6 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
     } catch (e) {
       // Skip this file, continue with the rest.
     }
-  }
-
-  for (const file of nonImageContentFiles) {
-    contenuFolder.file(file.filename, file.buffer);
-    anySucceeded = true;
   }
 
   if (!anySucceeded) {
