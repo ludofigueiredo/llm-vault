@@ -84,6 +84,4 @@ yarn-error.log*
 
 
 # Scratch HTML snapshots captured for reference during development
-/web_source.html
-/sidebar.html
-/select_projects.html
+/snippet-claude-website
