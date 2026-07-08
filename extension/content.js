@@ -52,91 +52,6 @@ function isFilesSidebarOpen(toggleButton) {
   return toggleButton.getAttribute('aria-pressed') === 'true';
 }
 
-function findArtefactsHeading() {
-  const headings = document.querySelectorAll('h3');
-  for (const heading of headings) {
-    if (heading.textContent.trim() === 'Artéfacts') return heading;
-  }
-  return null;
-}
-
-function normalizeWhitespace(text) {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
-function findArtifactDownloadButtons(artefactsHeading) {
-  let container = artefactsHeading.parentElement;
-  for (let i = 0; i < 5 && container; i++) {
-    const buttons = container.querySelectorAll('button[aria-label^="Télécharger "]');
-    if (buttons.length > 0) return [...buttons];
-    container = container.parentElement;
-  }
-  return [];
-}
-
-const ARTIFACT_TYPE_EXTENSIONS = {
-  HTML: 'html',
-  SVG: 'svg',
-  CODE: 'txt',
-  MARKDOWN: 'md',
-  JSON: 'json',
-  PYTHON: 'py',
-  JAVASCRIPT: 'js',
-  CSV: 'csv',
-  ZIP: 'zip'
-};
-
-function guessArtifactFilename(downloadButton, artifactTitle) {
-  const artifactBlock = downloadButton.closest('.group\\/artifact-block');
-  const typeLine = artifactBlock ? artifactBlock.querySelector('.text-xs.line-clamp-1') : null;
-  const typeText = typeLine ? normalizeWhitespace(typeLine.textContent).toUpperCase() : '';
-  let extension = 'txt';
-  for (const [key, ext] of Object.entries(ARTIFACT_TYPE_EXTENSIONS)) {
-    if (typeText.includes(key)) {
-      extension = ext;
-      break;
-    }
-  }
-  const slug = artifactTitle.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  return slug ? `${slug}.${extension}` : null;
-}
-
-async function scrapeArtifactFilenames() {
-  const toggleButton = findFilesToggleButton();
-  if (!toggleButton) return [];
-
-  const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
-  if (!wasAlreadyOpen) toggleButton.click();
-
-  const artefactsHeading = await waitForCondition(findArtefactsHeading, 3000, 150);
-  if (!artefactsHeading) {
-    if (!wasAlreadyOpen) toggleButton.click();
-    return [];
-  }
-
-  // Whether there's a "Tout télécharger" button (2+ artifacts) or just
-  // individual "Télécharger <name>" buttons (1 artifact), neither download
-  // calls createObjectURL — both hit the same wiggle/download-file(s)
-  // endpoint via a real GET navigation (confirmed via live Network
-  // captures for both cases). Each artifact card only shows a "humanized"
-  // title (e.g. "Keensight slide library v2"), not its real on-disk
-  // filename (e.g. "keensight_slide_library_v2.zip"), so guess it from the
-  // title + the card's type badge (best effort — the caller falls back to
-  // an empty artefacts/ folder for any artifact whose guessed URL 404s).
-  const buttons = findArtifactDownloadButtons(artefactsHeading);
-  if (!wasAlreadyOpen) toggleButton.click();
-
-  const filenames = [];
-  for (const button of buttons) {
-    const label = button.getAttribute('aria-label') || '';
-    const artifactTitle = label.replace(/^Télécharger\s+/, '').trim();
-    if (!artifactTitle) continue;
-    const guessedFilename = guessArtifactFilename(button, artifactTitle);
-    if (guessedFilename) filenames.push(guessedFilename);
-  }
-  return filenames;
-}
-
 function findContenuSection() {
   const headings = document.querySelectorAll('h3');
   for (const heading of headings) {
@@ -147,7 +62,7 @@ function findContenuSection() {
   return null;
 }
 
-function scrapeContentFiles() {
+function scrapeImageContentFiles() {
   const section = findContenuSection();
   if (!section) return [];
 
@@ -163,31 +78,25 @@ function scrapeContentFiles() {
   return files;
 }
 
-function scrapeNonImageContentFilenames() {
-  const section = findContenuSection();
-  if (!section) return [];
-
-  const filenames = [];
-  const wrappers = section.querySelectorAll('[data-testid="file-thumbnail"]');
-  wrappers.forEach((wrapper) => {
-    const heading = wrapper.querySelector('h3');
-    if (!heading) return;
-    const filename = heading.textContent.trim();
-    if (!filename) return;
-    filenames.push(filename);
-  });
-  return filenames;
-}
-
 async function getConversationArtifacts() {
-  const artifactFilenames = await scrapeArtifactFilenames();
-  const contentFiles = scrapeContentFiles();
-  const nonImageContentFilenames = scrapeNonImageContentFilenames();
-  return {
-    artifactFilenames,
-    contentFiles,
-    nonImageContentFilenames
-  };
+  // Image attachments have a /preview URL that only exists in the DOM (not
+  // derivable from the conversation JSON's /mnt/user-data paths), and that
+  // DOM lives behind the Files sidebar's "Contenu" section — everything
+  // else this extension needs (artifact filenames, uploaded non-image
+  // filenames) comes from the conversation JSON instead (see
+  // extractFilePaths in sidepanel.js), so this is now the only thing left
+  // to scrape here.
+  const toggleButton = findFilesToggleButton();
+  if (!toggleButton) return { contentFiles: [] };
+
+  const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);
+  if (!wasAlreadyOpen) toggleButton.click();
+
+  await waitForCondition(findContenuSection, 3000, 150);
+  const contentFiles = scrapeImageContentFiles();
+
+  if (!wasAlreadyOpen) toggleButton.click();
+  return { contentFiles };
 }
 
 let selectedProjectUuids = new Set();

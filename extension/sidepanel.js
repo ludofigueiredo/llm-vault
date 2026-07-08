@@ -5,6 +5,32 @@ let selectionMode = false;
 let selectedProjects = [];
 let batchInProgress = false;
 
+// Matches /mnt/user-data/uploads/<name> or /mnt/user-data/outputs/<name> as
+// they appear inside the conversation JSON's string values (tool_use bash
+// commands, tool_result output, chat_messages[].files[].path, etc.). Some of
+// these strings are multi-line bash commands rather than a bare path, so the
+// filename portion is restricted to characters plausible in a real
+// filename (word chars, spaces, dots, hyphens, parens) rather than reading
+// until the next quote — otherwise a `cp src dst\n...` command would swallow
+// everything up to its own closing quote as part of the "path".
+const USER_DATA_PATH_PATTERN = /\/mnt\/user-data\/(uploads|outputs)\/[\w .()-]+\.[\w]+/g;
+
+function extractFilePaths(conversationData) {
+  const json = JSON.stringify(conversationData);
+  const uploads = new Set();
+  const outputs = new Set();
+
+  let match;
+  while ((match = USER_DATA_PATH_PATTERN.exec(json)) !== null) {
+    const bucket = match[1];
+    const path = match[0];
+    if (bucket === 'uploads') uploads.add(path);
+    else outputs.add(path);
+  }
+
+  return { uploads: [...uploads], outputs: [...outputs] };
+}
+
 function isProjectsListingUrl(url) {
   try {
     const parsed = new URL(url);
@@ -374,37 +400,37 @@ async function runExport() {
 
       const conversation = { metadata: { name: data.name, uuid: data.uuid, created_at: data.created_at, updated_at: data.updated_at, model: data.model }, data };
 
-      let artifactsData = { artifactFiles: [], contentFiles: [] };
+      // The conversation JSON itself contains every /mnt/user-data/uploads/
+      // and /mnt/user-data/outputs/ file path claude.ai's own UI uses to
+      // build its download links (in chat_messages[].files[].path, tool_use
+      // bash commands, tool_result output, etc.) — scanning the whole
+      // response for these paths is far more reliable than guessing a
+      // filename from a DOM card's "humanized" title.
+      const filePaths = extractFilePaths(data);
+      const artifactFiles = filePaths.outputs.map((path) => ({
+        filename: path.split('/').pop(),
+        url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent(path)}`
+      }));
+      const uploadedFiles = filePaths.uploads.map((path) => ({
+        filename: path.split('/').pop(),
+        url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent(path)}`
+      }));
+
+      let artifactsData = { artifactFiles, contentFiles: [...uploadedFiles] };
       let contentScriptUnreachable = false;
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         setStatus('Capturing artifacts and content files...', '');
         const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONVERSATION_ARTIFACTS' });
         if (response) {
-          const nonImageFilenames = response.nonImageContentFilenames || [];
-          const nonImageUrls = nonImageFilenames.map((filename) => ({
-            filename,
-            url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/uploads/' + filename)}`
-          }));
-
-          // Artifact filenames were guessed from each card's title/type
-          // badge (claude.ai never exposes the real on-disk name), so any
-          // of these fetches may 404 if a guess is wrong - buildConversationZip
-          // skips those individually rather than failing the export.
-          const artifactFilenames = response.artifactFilenames || [];
-          const artifactFiles = artifactFilenames.map((filename) => ({
-            filename,
-            url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent('/mnt/user-data/outputs/' + filename)}`
-          }));
-
-          artifactsData = {
-            artifactFiles,
-            contentFiles: [...(response.contentFiles || []), ...nonImageUrls]
-          };
+          // Image content files still come from the DOM (their /preview URL
+          // isn't derivable from a /mnt/user-data path), merged alongside
+          // the JSON-derived uploads.
+          artifactsData.contentFiles = [...artifactsData.contentFiles, ...(response.contentFiles || [])];
         }
       } catch (e) {
         // Content script not present/responsive (e.g. the page was open before the
-        // extension was installed/reloaded) — proceed without artifacts/content.
+        // extension was installed/reloaded) — proceed without image content files.
         contentScriptUnreachable = true;
       }
 
