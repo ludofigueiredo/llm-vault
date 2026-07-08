@@ -182,7 +182,89 @@ async function confirmSelection() {
 }
 
 async function startBatchExport(projects) {
-  setStatus(`Batch export not yet implemented (would process ${projects.length} project(s)).`, 'error');
+  const confirmBtn = document.getElementById('confirm-selection-btn');
+  const selectBtn = document.getElementById('select-projects-btn');
+
+  setStatus('Resolving organization ID...', '');
+  const orgId = await getOrganizationId();
+  if (!orgId) {
+    setStatus('Batch export failed: could not find your organization ID. Make sure you are logged into claude.ai.', 'error');
+    selectBtn.style.display = 'block';
+    return;
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tab.id;
+
+  const zip = new JSZip();
+  const succeeded = [];
+  const failed = [];
+
+  for (let i = 0; i < projects.length; i++) {
+    const project = projects[i];
+    setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name}...`, '');
+
+    try {
+      await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${project.uuid}` });
+
+      const ready = await waitForContentScriptReady(tabId, 15000);
+      if (!ready) {
+        throw new Error('page did not finish loading in time');
+      }
+
+      const conversationsList = await fetchConversationsList(orgId, project.uuid);
+      if (!conversationsList || conversationsList.length === 0) {
+        throw new Error('no conversations found');
+      }
+
+      let projectMetadata = { memory: null, instructions: null };
+      try {
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_METADATA' });
+        if (response) {
+          projectMetadata = response;
+        }
+      } catch (e) {
+        // Proceed without memory/instructions for this project.
+      }
+
+      const conversations = await fetchAllConversations(orgId, conversationsList, (fetched, total) => {
+        setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name} (${fetched}/${total} conversations)...`, '');
+      });
+
+      if (conversations.length === 0) {
+        throw new Error('failed to fetch any conversations');
+      }
+
+      const folderName = `${sanitizeFilename(project.name)}_${project.uuid.substring(0, 8)}`;
+      await buildProjectZip(zip, folderName, project.uuid, conversations, projectMetadata);
+
+      succeeded.push(project.name);
+    } catch (error) {
+      failed.push({ name: project.name, reason: error.message });
+    }
+  }
+
+  if (succeeded.length === 0) {
+    setStatus(`Batch export failed: all ${projects.length} project(s) failed. ${failed.map(f => `${f.name}: ${f.reason}`).join('; ')}`, 'error');
+    selectBtn.style.display = 'block';
+    return;
+  }
+
+  setStatus(`Building combined zip for ${succeeded.length} project(s)...`, '');
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const downloadFilename = `projects_batch_${succeeded.length}.zip`;
+
+  const url = URL.createObjectURL(blob);
+  chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
+    URL.revokeObjectURL(url);
+  });
+
+  let finalMessage = `✅ Batch export complete: ${succeeded.length}/${projects.length} project(s) exported.`;
+  if (failed.length > 0) {
+    finalMessage += ` Failed: ${failed.map(f => `${f.name} (${f.reason})`).join(', ')}.`;
+  }
+  setStatus(finalMessage, 'success');
+  selectBtn.style.display = 'block';
 }
 
 // The side panel is persistent (unlike the old popup, it doesn't reload on
