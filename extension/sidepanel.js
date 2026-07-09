@@ -14,6 +14,21 @@ function isProjectsListingUrl(url) {
   }
 }
 
+function buildArtifactsDataFromConversationJson(orgId, conversationUuid, conversationData) {
+  const filePaths = extractFilePaths(conversationData);
+
+  const artifactFiles = filePaths.outputs.map((path) => ({
+    filename: path.split('/').pop(),
+    url: `https://claude.ai/api/organizations/${orgId}/conversations/${conversationUuid}/wiggle/download-file?path=${encodeURIComponent(path)}`
+  }));
+  const uploadedFiles = filePaths.uploads.map((path) => ({
+    filename: path.split('/').pop(),
+    url: `https://claude.ai/api/organizations/${orgId}/conversations/${conversationUuid}/wiggle/download-file?path=${encodeURIComponent(path)}`
+  }));
+
+  return { artifactFiles, contentFiles: uploadedFiles };
+}
+
 async function detectContext() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab.url || '';
@@ -376,21 +391,8 @@ async function runExport() {
 
       // The conversation JSON itself contains every /mnt/user-data/uploads/
       // and /mnt/user-data/outputs/ file path claude.ai's own UI uses to
-      // build its download links (in chat_messages[].files[].path, tool_use
-      // bash commands, tool_result output, etc.) — scanning the whole
-      // response for these paths is far more reliable than guessing a
-      // filename from a DOM card's "humanized" title.
-      const filePaths = extractFilePaths(data);
-      const artifactFiles = filePaths.outputs.map((path) => ({
-        filename: path.split('/').pop(),
-        url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent(path)}`
-      }));
-      const uploadedFiles = filePaths.uploads.map((path) => ({
-        filename: path.split('/').pop(),
-        url: `https://claude.ai/api/organizations/${orgId}/conversations/${exportConversationId}/wiggle/download-file?path=${encodeURIComponent(path)}`
-      }));
-
-      let artifactsData = { artifactFiles, contentFiles: [...uploadedFiles] };
+      // build its download links — see buildArtifactsDataFromConversationJson.
+      let artifactsData = buildArtifactsDataFromConversationJson(orgId, exportConversationId, data);
       let contentScriptUnreachable = false;
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
