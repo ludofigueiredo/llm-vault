@@ -299,7 +299,11 @@ async function selectAllRecents() {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SELECT_ALL_RECENTS_CONVERSATIONS' });
     const count = (response && response.count) || 0;
     document.getElementById('confirm-recents-selection-btn').textContent = `Confirm Selection (${count})`;
-    setStatus(`Selected ${count} conversation(s).`, '');
+    if (count === 0) {
+      setStatus('No conversations found on this page.', 'error');
+    } else {
+      setStatus(`Selected ${count} conversation(s).`, '');
+    }
   } catch (e) {
     setStatus('Could not select all conversations — try refreshing the page.', 'error');
   }
