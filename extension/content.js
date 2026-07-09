@@ -84,7 +84,7 @@ async function getConversationArtifacts() {
   // DOM lives behind the Files sidebar's "Contenu" section — everything
   // else this extension needs (artifact filenames, uploaded non-image
   // filenames) comes from the conversation JSON instead (see
-  // extractFilePaths in sidepanel.js), so this is now the only thing left
+  // extractFilePaths in lib/api.js), so this is now the only thing left
   // to scrape here.
   const toggleButton = findFilesToggleButton();
   if (!toggleButton) return { contentFiles: [] };
