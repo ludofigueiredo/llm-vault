@@ -66,7 +66,11 @@ function findContenuSection() {
 function findProjectFichiersSection() {
   const headings = document.querySelectorAll('h3');
   for (const heading of headings) {
-    if (heading.textContent.trim() !== 'Fichiers') continue;
+    // Free/Pro accounts label this section "Fichiers" (French); Claude
+    // Teams ("cowork") accounts use "Context" instead — same thumbnail
+    // grid markup otherwise.
+    const text = heading.textContent.trim();
+    if (text !== 'Fichiers' && text !== 'Context') continue;
     const container = heading.closest('.flex.flex-col.gap-2');
     if (container) return container;
   }
