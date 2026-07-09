@@ -37,7 +37,7 @@ Keep the side panel open for the whole batch — closing it mid-batch loses prog
 
 ### Exporting selected conversations from Recents
 
-1. Navigate to `claude.ai/recents` (the recents page showing your conversation history). The panel shows a **Select Recents** button.
+1. Navigate to `claude.ai/recents` (the recents page showing your conversation history). The panel shows a **Select Conversations** button.
 2. Click it, then click each conversation row you want to include — a red border appears around selected rows. Click a selected row again to deselect it. Alternatively, click **Select All** to auto-scroll through your entire conversation history and select every conversation found (this may take a minute or two for large histories, as the page lazy-loads).
 3. The panel's button updates live to **Confirm Selection (N)**. Click it once you've picked the conversations you want.
 4. The extension takes over: it fetches all selected conversations (same pipeline as a project export), briefly visits each conversation's page to capture its image attachments, then builds and downloads a combined `.zip` automatically.
