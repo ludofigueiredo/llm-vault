@@ -29,7 +29,7 @@ async function buildConversationFolder(zip, folderName, conversation, artifactsD
   await fetchFilesInto(contenuFolder, contentFiles);
 }
 
-async function buildProjectZip(zip, folderPath, projectId, conversations, projectMetadata) {
+async function buildProjectZip(zip, folderPath, projectId, conversations, projectMetadata, artifactsDataByUuid) {
   const target = folderPath ? zip.folder(folderPath) : zip;
 
   target.file('index.md', createIndexMarkdown(projectId, conversations));
@@ -44,7 +44,8 @@ async function buildProjectZip(zip, folderPath, projectId, conversations, projec
 
   for (const conv of conversations) {
     const folderName = conversationFolderName(conv);
-    await buildConversationFolder(target, folderName, conv);
+    const artifactsData = (artifactsDataByUuid && artifactsDataByUuid.get(conv.metadata.uuid)) || { artifactFiles: [], contentFiles: [] };
+    await buildConversationFolder(target, folderName, conv, artifactsData);
   }
 }
 
