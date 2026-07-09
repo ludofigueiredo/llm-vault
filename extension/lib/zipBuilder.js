@@ -40,7 +40,9 @@ async function buildProjectZip(zip, folderPath, projectId, conversations, projec
   if (projectMetadata && projectMetadata.instructions) {
     target.file('instructions.md', projectMetadata.instructions);
   }
-  target.folder('fichiers').file('.gitkeep', '');
+  const fichiersFolder = target.folder('fichiers');
+  const projectFiles = (projectMetadata && projectMetadata.files) || [];
+  await fetchFilesInto(fichiersFolder, projectFiles);
 
   for (const conv of conversations) {
     const folderName = conversationFolderName(conv);
