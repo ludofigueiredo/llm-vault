@@ -29,6 +29,42 @@ function buildArtifactsDataFromConversationJson(orgId, conversationUuid, convers
   return { artifactFiles, contentFiles: uploadedFiles };
 }
 
+function buildArtifactsDataByUuid(orgId, conversations) {
+  const artifactsDataByUuid = new Map();
+  for (const conv of conversations) {
+    const uuid = conv.metadata.uuid;
+    artifactsDataByUuid.set(uuid, buildArtifactsDataFromConversationJson(orgId, uuid, conv.data));
+  }
+  return artifactsDataByUuid;
+}
+
+async function captureProjectConversationImages(tabId, conversations, artifactsDataByUuid, onProgress) {
+  const total = conversations.length;
+  for (let i = 0; i < total; i++) {
+    const conv = conversations[i];
+    const uuid = conv.metadata.uuid;
+    if (onProgress) onProgress(i + 1, total, conv.metadata.name);
+
+    try {
+      await chrome.tabs.update(tabId, { url: `https://claude.ai/chat/${uuid}` });
+      const ready = await waitForContentScriptReady(tabId, 15000, `/chat/${uuid}`);
+      if (!ready) continue;
+
+      const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_CONVERSATION_ARTIFACTS' });
+      const imageFiles = (response && response.contentFiles) || [];
+      if (imageFiles.length === 0) continue;
+
+      const existing = artifactsDataByUuid.get(uuid) || { artifactFiles: [], contentFiles: [] };
+      existing.contentFiles = [...existing.contentFiles, ...imageFiles];
+      artifactsDataByUuid.set(uuid, existing);
+    } catch (e) {
+      // This conversation's images are skipped; its text/artefacts/uploaded
+      // files (already in artifactsDataByUuid from Phase 1.5) are kept.
+      // Never aborts the project/batch export.
+    }
+  }
+}
+
 async function detectContext() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab.url || '';
@@ -267,8 +303,13 @@ async function startBatchExport(projects) {
           throw new Error('failed to fetch any conversations');
         }
 
+        const artifactsDataByUuid = buildArtifactsDataByUuid(orgId, conversations);
+        await captureProjectConversationImages(tabId, conversations, artifactsDataByUuid, (current, total, name) => {
+          setStatus(`Capturing images ${current}/${total} in ${project.name}: ${name}...`, '');
+        });
+
         const folderName = `${sanitizeFilename(project.name)}_${project.uuid.substring(0, 8)}`;
-        await buildProjectZip(zip, folderName, project.uuid, conversations, projectMetadata);
+        await buildProjectZip(zip, folderName, project.uuid, conversations, projectMetadata, artifactsDataByUuid);
 
         succeeded.push(project.name);
       } catch (error) {
@@ -341,11 +382,13 @@ async function runExport() {
         throw new Error('No conversations found in this project.');
       }
 
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tabId = tab.id;
+
       let projectMetadata = { memory: null, instructions: null };
       let contentScriptUnreachable = false;
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_PROJECT_METADATA' });
+        const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_METADATA' });
         if (response) {
           projectMetadata = response;
         }
@@ -363,9 +406,20 @@ async function runExport() {
         throw new Error('Failed to fetch any conversations.');
       }
 
+      const artifactsDataByUuid = buildArtifactsDataByUuid(orgId, conversations);
+      await captureProjectConversationImages(tabId, conversations, artifactsDataByUuid, (current, total, name) => {
+        setStatus(`Capturing images ${current}/${total}: ${name}...`, '');
+      });
+
+      try {
+        await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${exportProjectId}` });
+      } catch (e) {
+        // Best-effort return navigation — the export itself has already succeeded.
+      }
+
       setStatus(`Building zip for ${conversations.length} conversations...`, '');
       const projectZip = new JSZip();
-      await buildProjectZip(projectZip, '', exportProjectId, conversations, projectMetadata);
+      await buildProjectZip(projectZip, '', exportProjectId, conversations, projectMetadata, artifactsDataByUuid);
       blob = await projectZip.generateAsync({ type: 'blob' });
       downloadFilename = `project_${exportProjectId.substring(0, 8)}.zip`;
 
