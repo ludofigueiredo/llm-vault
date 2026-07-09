@@ -1,0 +1,9 @@
+{
+  "name": "llm-vault",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build tooling for the LLM Vault Chrome extension.",
+  "scripts": {
+    "zip": "node scripts/build-zip.js"
+  }
+}
