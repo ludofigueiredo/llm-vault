@@ -86,7 +86,12 @@ async function getConversationArtifacts() {
   // filenames) comes from the conversation JSON instead (see
   // extractFilePaths in lib/api.js), so this is now the only thing left
   // to scrape here.
-  const toggleButton = findFilesToggleButton();
+  // The content script can respond to PING (confirming injection) before
+  // the page's own React app has rendered the Files toggle button, which
+  // happens routinely right after a fresh navigation — bound-poll for it
+  // rather than checking once, or every conversation visited early in a
+  // project export's navigation phase would silently return zero images.
+  const toggleButton = await waitForCondition(findFilesToggleButton, 3000, 150);
   if (!toggleButton) return { contentFiles: [] };
 
   const wasAlreadyOpen = isFilesSidebarOpen(toggleButton);

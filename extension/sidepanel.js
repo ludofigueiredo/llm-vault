@@ -375,8 +375,15 @@ async function runExport() {
     let blob, downloadFilename;
 
     if (exportMode === 'project') {
+      // Capture a local copy up front: captureProjectConversationImages()
+      // below navigates the tab repeatedly, and each navigation fires
+      // detectContext() (via chrome.tabs.onUpdated) which would otherwise
+      // overwrite the exportProjectId global mid-export once the tab lands
+      // on a /chat/{uuid} page.
+      const projectId = exportProjectId;
+
       setStatus('Fetching conversations list...', '');
-      const conversationsList = await fetchConversationsList(orgId, exportProjectId);
+      const conversationsList = await fetchConversationsList(orgId, projectId);
 
       if (!conversationsList || conversationsList.length === 0) {
         throw new Error('No conversations found in this project.');
@@ -407,21 +414,32 @@ async function runExport() {
       }
 
       const artifactsDataByUuid = buildArtifactsDataByUuid(orgId, conversations);
-      await captureProjectConversationImages(tabId, conversations, artifactsDataByUuid, (current, total, name) => {
-        setStatus(`Capturing images ${current}/${total}: ${name}...`, '');
-      });
 
+      // Guard detectContext() the same way the multi-project batch does:
+      // the navigation below is driven by this function, not the user, so
+      // the panel's tab-switch listener must not reinterpret it as the user
+      // browsing to a different project/conversation mid-export.
+      batchInProgress = true;
       try {
-        await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${exportProjectId}` });
-      } catch (e) {
-        // Best-effort return navigation — the export itself has already succeeded.
+        await captureProjectConversationImages(tabId, conversations, artifactsDataByUuid, (current, total, name) => {
+          setStatus(`Capturing images ${current}/${total}: ${name}...`, '');
+        });
+
+        try {
+          await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${projectId}` });
+        } catch (e) {
+          // Best-effort return navigation — the export itself has already succeeded.
+        }
+      } finally {
+        batchInProgress = false;
+        await detectContext();
       }
 
       setStatus(`Building zip for ${conversations.length} conversations...`, '');
       const projectZip = new JSZip();
-      await buildProjectZip(projectZip, '', exportProjectId, conversations, projectMetadata, artifactsDataByUuid);
+      await buildProjectZip(projectZip, '', projectId, conversations, projectMetadata, artifactsDataByUuid);
       blob = await projectZip.generateAsync({ type: 'blob' });
-      downloadFilename = `project_${exportProjectId.substring(0, 8)}.zip`;
+      downloadFilename = `project_${projectId.substring(0, 8)}.zip`;
 
       let projectStatusMessage;
       if (conversations.length < conversationsList.length) {
