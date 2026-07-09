@@ -143,14 +143,22 @@ function ensureSelectionStyle() {
   document.head.appendChild(style);
 }
 
+function findProjectsList() {
+  // Free/Pro accounts render the projects list with a French aria-label
+  // ("Projets"); Claude Teams ("cowork") accounts use the English UI
+  // ("Projects") instead — same markup shape otherwise.
+  return document.querySelector('ul[aria-label="Projets"]') || document.querySelector('ul[aria-label="Projects"]');
+}
+
 function findProjectListItems() {
-  const list = document.querySelector('ul[aria-label="Projets"]');
+  const list = findProjectsList();
   if (!list) return [];
   return [...list.querySelectorAll('li')];
 }
 
 function getProjectInfoFromListItem(li) {
-  const link = li.querySelector('a[href^="/project/"]');
+  // Teams accounts link to /cowork/project/{uuid} instead of /project/{uuid}.
+  const link = li.querySelector('a[href^="/project/"]') || li.querySelector('a[href^="/cowork/project/"]');
   if (!link) return null;
   const match = link.getAttribute('href').match(/\/project\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
   if (!match) return null;
@@ -175,7 +183,7 @@ function toggleProjectSelection(li) {
 function handleSelectionClick(event) {
   const li = event.target.closest('li');
   if (!li) return;
-  const list = document.querySelector('ul[aria-label="Projets"]');
+  const list = findProjectsList();
   if (!list || !list.contains(li)) return;
 
   event.preventDefault();
@@ -184,7 +192,7 @@ function handleSelectionClick(event) {
 }
 
 function startSelectionMode() {
-  const list = document.querySelector('ul[aria-label="Projets"]');
+  const list = findProjectsList();
   if (!list) return false;
 
   ensureSelectionStyle();
@@ -207,7 +215,7 @@ function getSelectedProjects() {
 }
 
 function stopSelectionMode() {
-  const list = document.querySelector('ul[aria-label="Projets"]');
+  const list = findProjectsList();
   if (list && selectionClickListener) {
     list.removeEventListener('click', selectionClickListener, true);
   }
