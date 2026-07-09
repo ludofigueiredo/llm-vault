@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is the **Claude Conversations Exporter** - a Chrome extension (Manifest V3) that exports Claude Project conversations or single conversations as structured `.zip` files containing Markdown.
+This is **LLM Vault** - a Chrome extension (Manifest V3) that exports Claude Project conversations or single conversations as structured `.zip` files containing Markdown. It currently supports claude.ai only; broader multi-provider LLM export support (e.g. ChatGPT) is a stated future direction, not yet implemented.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-# Claude Conversations Exporter
+# LLM Vault
 
 A Chrome extension that exports Claude conversations to structured Markdown.
 
