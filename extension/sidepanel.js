@@ -4,11 +4,21 @@ let exportConversationId = null;
 let selectionMode = false;
 let selectedProjects = [];
 let batchInProgress = false;
+let recentsSelectionMode = false;
 
 function isProjectsListingUrl(url) {
   try {
     const parsed = new URL(url);
     return parsed.hostname === 'claude.ai' && parsed.pathname === '/projects';
+  } catch (e) {
+    return false;
+  }
+}
+
+function isRecentsUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'claude.ai' && parsed.pathname === '/recents';
   } catch (e) {
     return false;
   }
@@ -73,8 +83,11 @@ async function detectContext() {
   const exportBtn = document.getElementById('export-btn');
   const selectProjectsBtn = document.getElementById('select-projects-btn');
   const confirmSelectionBtn = document.getElementById('confirm-selection-btn');
+  const selectRecentsBtn = document.getElementById('select-recents-btn');
+  const selectAllRecentsBtn = document.getElementById('select-all-recents-btn');
+  const confirmRecentsSelectionBtn = document.getElementById('confirm-recents-selection-btn');
 
-  if (selectionMode || batchInProgress) {
+  if (selectionMode || batchInProgress || recentsSelectionMode) {
     // Don't clobber the selection-mode/batch-export UI while either is in
     // progress — context re-detection from tab-switch listeners (fired by
     // this extension's own chrome.tabs.update() calls during a batch, among
@@ -94,6 +107,9 @@ async function detectContext() {
     exportBtn.style.display = 'block';
     selectProjectsBtn.style.display = 'none';
     confirmSelectionBtn.style.display = 'none';
+    selectRecentsBtn.style.display = 'none';
+    selectAllRecentsBtn.style.display = 'none';
+    confirmRecentsSelectionBtn.style.display = 'none';
   } else if (conversationId) {
     exportMode = 'conversation';
     exportConversationId = conversationId;
@@ -102,18 +118,36 @@ async function detectContext() {
     exportBtn.style.display = 'block';
     selectProjectsBtn.style.display = 'none';
     confirmSelectionBtn.style.display = 'none';
+    selectRecentsBtn.style.display = 'none';
+    selectAllRecentsBtn.style.display = 'none';
+    confirmRecentsSelectionBtn.style.display = 'none';
   } else if (isProjectsListingUrl(url)) {
     exportMode = null;
     contextMessage.textContent = 'Claude Projects list detected.';
     exportBtn.style.display = 'none';
     selectProjectsBtn.style.display = 'block';
     confirmSelectionBtn.style.display = 'none';
+    selectRecentsBtn.style.display = 'none';
+    selectAllRecentsBtn.style.display = 'none';
+    confirmRecentsSelectionBtn.style.display = 'none';
+  } else if (isRecentsUrl(url)) {
+    exportMode = null;
+    contextMessage.textContent = 'Claude recent conversations detected.';
+    exportBtn.style.display = 'none';
+    selectProjectsBtn.style.display = 'none';
+    confirmSelectionBtn.style.display = 'none';
+    selectRecentsBtn.style.display = 'block';
+    selectAllRecentsBtn.style.display = 'none';
+    confirmRecentsSelectionBtn.style.display = 'none';
   } else {
     exportMode = null;
     contextMessage.textContent = 'Navigate to a Claude project (claude.ai/project/...) or conversation (claude.ai/chat/...) page to export it.';
     exportBtn.style.display = 'none';
     selectProjectsBtn.style.display = 'none';
     confirmSelectionBtn.style.display = 'none';
+    selectRecentsBtn.style.display = 'none';
+    selectAllRecentsBtn.style.display = 'none';
+    confirmRecentsSelectionBtn.style.display = 'none';
   }
 }
 
@@ -162,6 +196,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('confirm-selection-btn').addEventListener('click', () => {
     confirmSelection();
   });
+  document.getElementById('select-recents-btn').addEventListener('click', () => {
+    enterRecentsSelectionMode();
+  });
+  document.getElementById('select-all-recents-btn').addEventListener('click', () => {
+    selectAllRecents();
+  });
+  document.getElementById('confirm-recents-selection-btn').addEventListener('click', () => {
+    confirmRecentsSelection();
+  });
 });
 
 async function enterSelectionMode() {
@@ -204,6 +247,161 @@ function pollSelectionCount() {
       // last known count displayed rather than erroring the panel.
     }
   }, 500);
+}
+
+async function enterRecentsSelectionMode() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_RECENTS_SELECTION_MODE' });
+    if (!response || !response.armed) {
+      setStatus('Could not start selection mode — the conversations list was not found on this page.', 'error');
+      return;
+    }
+  } catch (e) {
+    setStatus('Could not start selection mode — try refreshing the page and reopening the panel.', 'error');
+    return;
+  }
+
+  recentsSelectionMode = true;
+  document.getElementById('select-recents-btn').style.display = 'none';
+  document.getElementById('select-all-recents-btn').style.display = 'block';
+  document.getElementById('confirm-recents-selection-btn').style.display = 'block';
+  document.getElementById('confirm-recents-selection-btn').textContent = 'Confirm Selection (0)';
+  document.getElementById('context-message').textContent = 'Click conversation rows to select them, then click Confirm.';
+  pollRecentsSelectionCount();
+}
+
+let recentsSelectionPollTimer = null;
+
+function pollRecentsSelectionCount() {
+  if (recentsSelectionPollTimer) clearInterval(recentsSelectionPollTimer);
+  recentsSelectionPollTimer = setInterval(async () => {
+    if (!recentsSelectionMode) {
+      clearInterval(recentsSelectionPollTimer);
+      return;
+    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    try {
+      const conversations = await chrome.tabs.sendMessage(tab.id, { type: 'GET_SELECTED_RECENTS_CONVERSATIONS' });
+      const count = Array.isArray(conversations) ? conversations.length : 0;
+      document.getElementById('confirm-recents-selection-btn').textContent = `Confirm Selection (${count})`;
+    } catch (e) {
+      // Content script not reachable (e.g. user navigated away) — leave the
+      // last known count displayed rather than erroring the panel.
+    }
+  }, 500);
+}
+
+async function selectAllRecents() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  setStatus('Scrolling to load all conversations...', '');
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SELECT_ALL_RECENTS_CONVERSATIONS' });
+    const count = (response && response.count) || 0;
+    document.getElementById('confirm-recents-selection-btn').textContent = `Confirm Selection (${count})`;
+    setStatus(`Selected ${count} conversation(s).`, '');
+  } catch (e) {
+    setStatus('Could not select all conversations — try refreshing the page.', 'error');
+  }
+}
+
+async function confirmRecentsSelection() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  let selected = [];
+  try {
+    selected = await chrome.tabs.sendMessage(tab.id, { type: 'GET_SELECTED_RECENTS_CONVERSATIONS' });
+  } catch (e) {
+    selected = [];
+  }
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'STOP_RECENTS_SELECTION_MODE' });
+  } catch (e) {
+    // Best-effort cleanup — if this fails, the visual borders may linger on
+    // the page until the next reload, but the export itself is unaffected.
+  }
+
+  if (recentsSelectionPollTimer) {
+    clearInterval(recentsSelectionPollTimer);
+    recentsSelectionPollTimer = null;
+  }
+
+  recentsSelectionMode = false;
+  document.getElementById('select-all-recents-btn').style.display = 'none';
+  document.getElementById('confirm-recents-selection-btn').style.display = 'none';
+
+  if (!Array.isArray(selected) || selected.length === 0) {
+    setStatus('No conversations were selected.', 'error');
+    detectContext();
+    return;
+  }
+
+  await startRecentsExport(selected);
+}
+
+async function startRecentsExport(conversationsSelected) {
+  const selectBtn = document.getElementById('select-recents-btn');
+
+  // Same guard as project export's navigation phase (runExport) and the
+  // multi-project batch (startBatchExport): the navigation below is driven
+  // by this function, not the user, so detectContext() must not reinterpret
+  // it as the user browsing away mid-export.
+  batchInProgress = true;
+  exportBtnDisabledForBatch(true);
+
+  try {
+    setStatus('Resolving organization ID...', '');
+    const orgId = await getOrganizationId();
+    if (!orgId) {
+      setStatus('Export failed: could not find your organization ID. Make sure you are logged into claude.ai.', 'error');
+      return;
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tab.id;
+
+    setStatus(`Fetching ${conversationsSelected.length} conversation(s)...`, '');
+    const conversations = await fetchAllConversations(orgId, conversationsSelected, (fetched, total) => {
+      setStatus(`Fetched ${fetched}/${total} conversations...`, '');
+    });
+
+    if (conversations.length === 0) {
+      setStatus('Export failed: could not fetch any of the selected conversations.', 'error');
+      return;
+    }
+
+    const artifactsDataByUuid = buildArtifactsDataByUuid(orgId, conversations);
+    await captureProjectConversationImages(tabId, conversations, artifactsDataByUuid, (current, total, name) => {
+      setStatus(`Capturing images ${current}/${total}: ${name}...`, '');
+    });
+
+    try {
+      await chrome.tabs.update(tabId, { url: 'https://claude.ai/recents' });
+    } catch (e) {
+      // Best-effort return navigation — the export itself has already succeeded.
+    }
+
+    setStatus(`Building zip for ${conversations.length} conversation(s)...`, '');
+    const blob = await buildConversationsSelectionZip(conversations, artifactsDataByUuid);
+    const downloadFilename = `conversations_selection_${conversations.length}.zip`;
+
+    const url = URL.createObjectURL(blob);
+    chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
+      URL.revokeObjectURL(url);
+    });
+
+    let finalMessage = `✅ Exported ${conversations.length}/${conversationsSelected.length} conversation(s).`;
+    if (conversations.length < conversationsSelected.length) {
+      finalMessage += ` ${conversationsSelected.length - conversations.length} failed to fetch.`;
+    }
+    setStatus(finalMessage, 'success');
+  } finally {
+    batchInProgress = false;
+    exportBtnDisabledForBatch(false);
+    selectBtn.style.display = 'block';
+    await detectContext();
+  }
 }
 
 async function confirmSelection() {
