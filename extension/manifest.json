@@ -14,7 +14,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://claude.ai/project/*", "https://claude.ai/chat/*", "https://claude.ai/projects"],
+      "matches": ["https://claude.ai/project/*", "https://claude.ai/chat/*", "https://claude.ai/projects", "https://claude.ai/recents"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
