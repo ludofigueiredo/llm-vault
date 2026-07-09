@@ -9,7 +9,7 @@ let recentsSelectionMode = false;
 function isProjectsListingUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === 'claude.ai' && parsed.pathname === '/projects';
+    return parsed.hostname === 'claude.ai' && (parsed.pathname === '/projects' || parsed.pathname === '/cowork/projects');
   } catch (e) {
     return false;
   }
@@ -18,9 +18,36 @@ function isProjectsListingUrl(url) {
 function isRecentsUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === 'claude.ai' && parsed.pathname === '/recents';
+    return parsed.hostname === 'claude.ai' && (parsed.pathname === '/recents' || parsed.pathname === '/chats');
   } catch (e) {
     return false;
+  }
+}
+
+// Claude Teams ("cowork") accounts serve project pages under
+// /cowork/project/{uuid} and /cowork/projects instead of /project/{uuid}
+// and /projects — same UUIDs, same (assumed) page content, different path
+// prefix. Detecting this from the URL the export was launched from lets
+// every navigation this extension constructs later (returning to the
+// project page, visiting each project/conversation in a batch) stay
+// consistent with whichever variant the user is actually on.
+function getProjectBasePath(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.startsWith('/cowork/') ? '/cowork/project/' : '/project/';
+  } catch (e) {
+    return '/project/';
+  }
+}
+
+// Same idea as getProjectBasePath, for the conversations-listing page: Claude
+// Teams accounts use /chats instead of /recents.
+function getRecentsPath(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname === '/chats' ? '/chats' : '/recents';
+  } catch (e) {
+    return '/recents';
   }
 }
 
@@ -364,6 +391,7 @@ async function startRecentsExport(conversationsSelected) {
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab.id;
+    const recentsPath = getRecentsPath(tab.url || '');
 
     setStatus(`Fetching ${conversationsSelected.length} conversation(s)...`, '');
     const conversations = await fetchAllConversations(orgId, conversationsSelected, (fetched, total) => {
@@ -381,7 +409,7 @@ async function startRecentsExport(conversationsSelected) {
     });
 
     try {
-      await chrome.tabs.update(tabId, { url: 'https://claude.ai/recents' });
+      await chrome.tabs.update(tabId, { url: `https://claude.ai${recentsPath}` });
     } catch (e) {
       // Best-effort return navigation — the export itself has already succeeded.
     }
@@ -465,6 +493,7 @@ async function startBatchExport(projects) {
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab.id;
+    const basePath = getProjectBasePath(tab.url || '');
 
     const zip = new JSZip();
     const succeeded = [];
@@ -475,9 +504,9 @@ async function startBatchExport(projects) {
       setStatus(`Scraping project ${i + 1}/${projects.length}: ${project.name}...`, '');
 
       try {
-        await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${project.uuid}` });
+        await chrome.tabs.update(tabId, { url: `https://claude.ai${basePath}${project.uuid}` });
 
-        const ready = await waitForContentScriptReady(tabId, 15000, `/project/${project.uuid}`);
+        const ready = await waitForContentScriptReady(tabId, 15000, `${basePath}${project.uuid}`);
         if (!ready) {
           throw new Error('page did not finish loading in time');
         }
@@ -593,6 +622,7 @@ async function runExport() {
 
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const tabId = tab.id;
+      const basePath = getProjectBasePath(tab.url || '');
 
       let projectMetadata = { memory: null, instructions: null };
       let contentScriptUnreachable = false;
@@ -628,7 +658,7 @@ async function runExport() {
         });
 
         try {
-          await chrome.tabs.update(tabId, { url: `https://claude.ai/project/${projectId}` });
+          await chrome.tabs.update(tabId, { url: `https://claude.ai${basePath}${projectId}` });
         } catch (e) {
           // Best-effort return navigation — the export itself has already succeeded.
         }
