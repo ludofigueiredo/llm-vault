@@ -77,3 +77,29 @@ async function fetchAllConversations(orgId, conversationsList, onProgress) {
 
   return conversations;
 }
+
+// Matches /mnt/user-data/uploads/<name> or /mnt/user-data/outputs/<name> as
+// they appear inside the conversation JSON's string values (tool_use bash
+// commands, tool_result output, chat_messages[].files[].path, etc.). Some of
+// these strings are multi-line bash commands rather than a bare path, so the
+// filename portion is restricted to characters plausible in a real
+// filename (word chars, spaces, dots, hyphens, parens) rather than reading
+// until the next quote — otherwise a `cp src dst\n...` command would swallow
+// everything up to its own closing quote as part of the "path".
+const USER_DATA_PATH_PATTERN = /\/mnt\/user-data\/(uploads|outputs)\/[\w .()-]+\.[\w]+/g;
+
+function extractFilePaths(conversationData) {
+  const json = JSON.stringify(conversationData);
+  const uploads = new Set();
+  const outputs = new Set();
+
+  let match;
+  while ((match = USER_DATA_PATH_PATTERN.exec(json)) !== null) {
+    const bucket = match[1];
+    const path = match[0];
+    if (bucket === 'uploads') uploads.add(path);
+    else outputs.add(path);
+  }
+
+  return { uploads: [...uploads], outputs: [...outputs] };
+}
