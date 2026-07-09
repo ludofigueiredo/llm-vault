@@ -219,6 +219,88 @@ function stopSelectionMode() {
   selectedProjectUuids = new Set();
 }
 
+let selectedRecentsUuids = new Set();
+let recentsSelectionClickListener = null;
+
+function findRecentsTable() {
+  return document.querySelector('table[data-cds="Table"]');
+}
+
+function findRecentsRows() {
+  const table = findRecentsTable();
+  if (!table) return [];
+  return [...table.querySelectorAll('tbody tr[data-hoverable]')];
+}
+
+function getConversationInfoFromRow(row) {
+  const link = row.querySelector('a[href^="/chat/"]');
+  if (!link) return null;
+  const match = link.getAttribute('href').match(/\/chat\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+  if (!match) return null;
+  const name = link.getAttribute('aria-label') || match[1];
+  return { uuid: match[1], name };
+}
+
+function toggleRecentsSelection(row) {
+  const info = getConversationInfoFromRow(row);
+  if (!info) return;
+
+  if (selectedRecentsUuids.has(info.uuid)) {
+    selectedRecentsUuids.delete(info.uuid);
+    row.classList.remove(SELECTED_BORDER_CLASS);
+  } else {
+    selectedRecentsUuids.add(info.uuid);
+    row.classList.add(SELECTED_BORDER_CLASS);
+  }
+}
+
+function handleRecentsSelectionClick(event) {
+  const row = event.target.closest('tr[data-hoverable]');
+  if (!row) return;
+  const table = findRecentsTable();
+  if (!table || !table.contains(row)) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  toggleRecentsSelection(row);
+}
+
+function startRecentsSelectionMode() {
+  const table = findRecentsTable();
+  if (!table) return false;
+
+  ensureSelectionStyle();
+  selectedRecentsUuids = new Set();
+  recentsSelectionClickListener = handleRecentsSelectionClick;
+  table.addEventListener('click', recentsSelectionClickListener, true);
+  return true;
+}
+
+function getSelectedRecentsConversations() {
+  const rows = findRecentsRows();
+  const results = [];
+  for (const row of rows) {
+    const info = getConversationInfoFromRow(row);
+    if (info && selectedRecentsUuids.has(info.uuid)) {
+      results.push({ uuid: info.uuid, name: info.name });
+    }
+  }
+  return results;
+}
+
+function stopRecentsSelectionMode() {
+  const table = findRecentsTable();
+  if (table && recentsSelectionClickListener) {
+    table.removeEventListener('click', recentsSelectionClickListener, true);
+  }
+  recentsSelectionClickListener = null;
+
+  for (const row of findRecentsRows()) {
+    row.classList.remove(SELECTED_BORDER_CLASS);
+  }
+  selectedRecentsUuids = new Set();
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'GET_PROJECT_METADATA') {
     sendResponse(getProjectMetadata());
@@ -238,6 +320,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message && message.type === 'STOP_SELECTION_MODE') {
     stopSelectionMode();
+    sendResponse({ stopped: true });
+    return false;
+  }
+  if (message && message.type === 'START_RECENTS_SELECTION_MODE') {
+    sendResponse({ armed: startRecentsSelectionMode() });
+    return false;
+  }
+  if (message && message.type === 'GET_SELECTED_RECENTS_CONVERSATIONS') {
+    sendResponse(getSelectedRecentsConversations());
+    return false;
+  }
+  if (message && message.type === 'STOP_RECENTS_SELECTION_MODE') {
+    stopRecentsSelectionMode();
     sendResponse({ stopped: true });
     return false;
   }
