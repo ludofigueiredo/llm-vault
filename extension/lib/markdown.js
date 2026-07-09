@@ -103,3 +103,30 @@ function createIndexMarkdown(projectId, conversations) {
 
   return markdown;
 }
+
+function createConversationsSelectionIndexMarkdown(conversations) {
+  let markdown = `# Conversations Export\n\n`;
+  markdown += `*Export Date: ${new Date().toLocaleString()}*\n`;
+  markdown += `*Total Conversations: ${conversations.length}*\n\n`;
+  markdown += `---\n\n`;
+  markdown += `## Conversations\n\n`;
+
+  // Unlike createIndexMarkdown (project export, where conv.metadata comes
+  // from the conversations_v2 API and already has created_at/updated_at/
+  // model), this selection's conv.metadata only ever has {uuid, name} —
+  // read those fields from conv.data instead, the full conversation JSON
+  // that's always present by the time this runs.
+  const sorted = [...conversations].sort((a, b) =>
+    new Date(b.data.updated_at) - new Date(a.data.updated_at)
+  );
+
+  sorted.forEach((conv, index) => {
+    const folderName = conversationFolderName(conv);
+    markdown += `${index + 1}. [${conv.metadata.name}](./${folderName}/conversation.md)\n`;
+    markdown += `   - Created: ${new Date(conv.data.created_at).toLocaleDateString()}\n`;
+    markdown += `   - Updated: ${new Date(conv.data.updated_at).toLocaleDateString()}\n`;
+    markdown += `   - Model: ${conv.data.model}\n\n`;
+  });
+
+  return markdown;
+}
