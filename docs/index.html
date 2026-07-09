@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — LLM Vault</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  .updated { color: #666; font-size: 14px; margin-bottom: 32px; }
+  h2 { font-size: 20px; margin-top: 32px; }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 10px; }
+  code { background: #f2f2f2; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  a { color: #3498db; }
+</style>
+</head>
+<body>
+
+<h1>Privacy Policy — LLM Vault</h1>
+<p class="updated">Last updated: July 9, 2026</p>
+
+<h2>Summary</h2>
+<p>LLM Vault does not collect, store, transmit, or sell any user data. It runs entirely inside your browser and only communicates with claude.ai.</p>
+
+<h2>What the extension does</h2>
+<p>LLM Vault is a Chrome extension that exports Claude.ai conversations and Projects into structured Markdown <code>.zip</code> files, downloaded to your own computer.</p>
+
+<h2>Data access and use</h2>
+<ul>
+  <li><strong>claude.ai session</strong>: The extension reads your existing claude.ai browser session (via the <code>lastActiveOrg</code> cookie) to identify your organization and call the same internal API endpoints the claude.ai web app itself already uses to list and fetch your conversations. This is the same data you already see by using claude.ai normally.</li>
+  <li><strong>Page content</strong>: On claude.ai pages, the extension's content script reads on-page text and image URLs (e.g. a Project's Memory/Instructions text, attached image thumbnails) that aren't exposed through claude.ai's API, so they can be included in your export.</li>
+  <li><strong>No third-party transmission</strong>: The extension does not send any data to any server other than claude.ai. There is no analytics, telemetry, tracking, or remote logging of any kind.</li>
+  <li><strong>No persistent storage</strong>: The extension does not store your conversation data anywhere except the <code>.zip</code> file it downloads directly to your computer via Chrome's own download mechanism. Nothing is retained in extension storage between sessions.</li>
+</ul>
+
+<h2>Permissions</h2>
+<p>The extension requests <code>downloads</code>, <code>activeTab</code>, <code>cookies</code>, <code>sidePanel</code>, and <code>tabs</code> — each is used solely to read claude.ai page/session data and save the resulting export file locally. No permission is used for any purpose beyond that.</p>
+
+<h2>Third parties</h2>
+<p>LLM Vault has no third-party integrations, embedded SDKs, or external dependencies loaded at runtime. Its only bundled dependency is a vendored copy of JSZip (used to build the <code>.zip</code> file locally), which does not communicate with any server.</p>
+
+<h2>Changes to this policy</h2>
+<p>Any future change to what data this extension accesses will be reflected here before being published.</p>
+
+<h2>Contact</h2>
+<p>For questions about this policy, contact <a href="mailto:ludofigueiredo@gmail.com">ludofigueiredo@gmail.com</a>.</p>
+
+</body>
+</html>
