@@ -5,6 +5,7 @@ A Chrome extension that exports Claude conversations to structured Markdown.
 - **Project export**: exports every conversation in a Claude Project as a `.zip` containing an `index.md` summary plus one folder per conversation.
 - **Single conversation export**: exports one conversation as a `.zip` with the same per-conversation folder structure.
 - **Multi-project batch export**: from the `claude.ai/projects` listing page, visually select several projects (red border on click) and export all of them into one combined `.zip`, one subfolder per project.
+- **Multi-conversation recents export**: from the `claude.ai/recents` page, visually select individual recent conversations (red border on click) or use "Select All" to bulk-select with auto-scroll, then export them into one `.zip` containing a combined index and one folder per conversation.
 
 ## Installation (developer mode)
 
@@ -33,6 +34,16 @@ This extension is not published to the Chrome Web Store. Install it manually (re
 5. Once every selected project has been processed, one combined `.zip` downloads automatically, containing a subfolder per project.
 
 Keep the side panel open for the whole batch — closing it mid-batch loses progress (the batch does not resume). If a project fails to load or scrape, it's skipped and the batch continues with the rest; the final status message reports which ones failed and why.
+
+### Exporting selected conversations from Recents
+
+1. Navigate to `claude.ai/recents` (the recents page showing your conversation history). The panel shows a **Select Recents** button.
+2. Click it, then click each conversation row you want to include — a red border appears around selected rows. Click a selected row again to deselect it. Alternatively, click **Select All** to auto-scroll through your entire conversation history and select every conversation found (this may take a minute or two for large histories, as the page lazy-loads).
+3. The panel's button updates live to **Confirm Selection (N)**. Click it once you've picked the conversations you want.
+4. The extension takes over: it fetches all selected conversations (same pipeline as a project export), briefly visits each conversation's page to capture its image attachments, then builds and downloads a combined `.zip` automatically.
+5. Once every selected conversation has been processed, one combined `.zip` downloads automatically, containing a unified index and one folder per conversation.
+
+Keep the side panel open for the whole export — closing it mid-export loses progress. If a conversation fails to fetch, it's skipped and the export continues with the rest; the final status message reports how many succeeded.
 
 ## Output structure
 
@@ -77,6 +88,22 @@ project-name-b_<uuid8>/
 ```
 
 Each selected project gets its own subfolder with the exact same contents as a standalone project export.
+
+**Multi-conversation recents export** (`conversations_selection_<count>.zip`):
+
+```
+index.md
+conversation-title-a_<uuid8>/
+  conversation.md
+  artefacts/
+  contenu/
+conversation-title-b_<uuid8>/
+  conversation.md
+  artefacts/
+  contenu/
+```
+
+Each selected conversation gets its own subfolder with the same structure as a single-conversation export.
 
 For **single conversation exports**, `artefacts/` and `contenu/` are populated automatically: `artefacts/` contains any Claude-generated artifacts attached to the conversation, and `contenu/` contains any individually-attached files (images and other file types like `.pptx` alike) — both are fetched directly by URL, using the real on-disk filenames found inside the conversation's own data. This only works for the conversation currently open in your active browser tab. If a conversation has no artifacts or no attached files, the corresponding folder stays empty.
 
