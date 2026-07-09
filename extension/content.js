@@ -21,7 +21,8 @@ function extractSectionText(labelText) {
 function getProjectMetadata() {
   return {
     memory: extractSectionText('Mémoire'),
-    instructions: extractSectionText('Instructions')
+    instructions: extractSectionText('Instructions'),
+    files: scrapeProjectFiles()
   };
 }
 
@@ -60,6 +61,32 @@ function findContenuSection() {
     if (container) return container;
   }
   return null;
+}
+
+function findProjectFichiersSection() {
+  const headings = document.querySelectorAll('h3');
+  for (const heading of headings) {
+    if (heading.textContent.trim() !== 'Fichiers') continue;
+    const container = heading.closest('.flex.flex-col.gap-2');
+    if (container) return container;
+  }
+  return null;
+}
+
+function scrapeProjectFiles() {
+  const section = findProjectFichiersSection();
+  if (!section) return [];
+
+  const files = [];
+  const images = section.querySelectorAll('img[src]');
+  images.forEach((img) => {
+    const alt = img.getAttribute('alt');
+    const src = img.getAttribute('src');
+    if (!alt || !src) return;
+    const url = new URL(src, window.location.origin).href;
+    files.push({ filename: alt, url });
+  });
+  return files;
 }
 
 function scrapeImageContentFiles() {
