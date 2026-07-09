@@ -57,3 +57,16 @@ async function buildConversationZip(conversation, artifactsData) {
   await buildConversationFolder(zip, folderName, conversation, artifactsData);
   return zip.generateAsync({ type: 'blob' });
 }
+
+async function buildConversationsSelectionZip(conversations, artifactsDataByUuid) {
+  const zip = new JSZip();
+  zip.file('index.md', createConversationsSelectionIndexMarkdown(conversations));
+
+  for (const conv of conversations) {
+    const folderName = conversationFolderName(conv);
+    const artifactsData = (artifactsDataByUuid && artifactsDataByUuid.get(conv.metadata.uuid)) || { artifactFiles: [], contentFiles: [] };
+    await buildConversationFolder(zip, folderName, conv, artifactsData);
+  }
+
+  return zip.generateAsync({ type: 'blob' });
+}
