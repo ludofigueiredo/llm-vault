@@ -301,6 +301,58 @@ function stopRecentsSelectionMode() {
   selectedRecentsUuids = new Set();
 }
 
+function waitForRowCountToStabilize(timeoutMs, stableChecksRequired, intervalMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let lastCount = -1;
+    let stableChecks = 0;
+
+    const poll = () => {
+      window.scrollTo(0, document.body.scrollHeight);
+      const count = findRecentsRows().length;
+
+      if (count === lastCount) {
+        stableChecks++;
+      } else {
+        stableChecks = 0;
+        lastCount = count;
+      }
+
+      if (stableChecks >= stableChecksRequired) {
+        resolve(count);
+        return;
+      }
+      if (Date.now() - start >= timeoutMs) {
+        resolve(count);
+        return;
+      }
+      setTimeout(poll, intervalMs);
+    };
+    poll();
+  });
+}
+
+async function selectAllRecentsConversations() {
+  const table = findRecentsTable();
+  if (!table) return 0;
+
+  ensureSelectionStyle();
+  // 3 consecutive stable checks at 500ms apart (1.5s of no growth) before
+  // concluding lazy-load has nothing more to give — long enough to absorb
+  // claude.ai's own load latency, short enough not to stall the panel for
+  // an account with a merely-large-but-finite history.
+  await waitForRowCountToStabilize(30000, 3, 500);
+
+  const rows = findRecentsRows();
+  for (const row of rows) {
+    const info = getConversationInfoFromRow(row);
+    if (!info) continue;
+    selectedRecentsUuids.add(info.uuid);
+    row.classList.add(SELECTED_BORDER_CLASS);
+  }
+  return selectedRecentsUuids.size;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'GET_PROJECT_METADATA') {
     sendResponse(getProjectMetadata());
@@ -335,6 +387,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopRecentsSelectionMode();
     sendResponse({ stopped: true });
     return false;
+  }
+  if (message && message.type === 'SELECT_ALL_RECENTS_CONVERSATIONS') {
+    selectAllRecentsConversations().then((count) => sendResponse({ count }));
+    return true;
   }
   if (message && message.type === 'PING') {
     sendResponse({ pong: true, pathname: window.location.pathname });
