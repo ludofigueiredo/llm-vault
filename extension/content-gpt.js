@@ -105,8 +105,11 @@ function gptWaitForThreadToStabilize(timeoutMs, stableChecksRequired, intervalMs
     const start = Date.now();
     let lastCount = -1;
     let stableChecks = 0;
-    // Scroll the thread's scroll container. ChatGPT threads live in a
-    // scrollable main; scrolling window + the main covers both layouts.
+    // De-virtualize the thread by scrolling the document to the top (to
+    // load the earliest turns) then to the bottom, repeatedly, until the
+    // turn count stops growing. ChatGPT's thread scrolls via the document
+    // itself, so window.scrollTo drives it; if a future layout moves the
+    // thread into an inner scroll container this will need revisiting.
     const poll = () => {
       window.scrollTo(0, 0); // load earliest turns first
       const count = gptFindTurns().length;
