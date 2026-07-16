@@ -67,7 +67,8 @@ function gptScrapeConversationList() {
     seen.add(convId);
     const titleEl = a.querySelector('.text-sm.font-medium');
     const title = (titleEl && titleEl.textContent.trim()) || convId;
-    conversations.push({ title, convId });
+    const url = new URL(href, window.location.origin).href;
+    conversations.push({ title, convId, url });
   }
   return conversations;
 }

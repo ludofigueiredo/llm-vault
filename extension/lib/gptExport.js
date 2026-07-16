@@ -30,16 +30,15 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
   if (conversations.length === 0) throw new Error('no conversations');
 
   // 3. Visit each conversation and scrape its thread.
-  const base = projectUrl.replace(/\/project$/, ''); // /g/g-p-<id>-<slug>
-  // conversation URL shape: /g/g-p-<id>-<slug>/c/<convId>; but the project
-  // URL may lack the slug. Build from the same origin + the href pattern
-  // the list scrape gave us is safest: reconstruct via /c/<convId>.
-  const origin = new URL(projectUrl).origin;
+  // Prefer the real href scraped from the DOM (includes the -<slug> segment);
+  // only reconstruct from the project URL as a fallback if it's missing.
   const result = { project, conversations: [] };
   for (let i = 0; i < conversations.length; i++) {
     const conv = conversations[i];
     if (onProgress) onProgress(i + 1, conversations.length, conv.title);
-    const convUrl = `${origin}${base.replace(origin, '')}/c/${conv.convId}`;
+    const origin = new URL(projectUrl).origin;
+    const convUrl = conv.url
+      || `${origin}${projectUrl.replace(origin, '').replace(/\/project$/, '')}/c/${conv.convId}`;
     try {
       await chrome.tabs.update(tabId, { url: convUrl });
       const convReady = await waitForContentScriptReady(tabId, 15000, `/c/${conv.convId}`);
