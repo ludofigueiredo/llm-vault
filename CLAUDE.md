@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **LLM Vault** - a Chrome extension (Manifest V3) that exports Claude Project conversations or single conversations as structured `.zip` files containing Markdown. It currently supports claude.ai only; broader multi-provider LLM export support (e.g. ChatGPT) is a stated future direction, not yet implemented.
+This is **LLM Vault** - a Chrome extension (Manifest V3) that exports Claude Project conversations or single conversations, and now ChatGPT Project conversations, as structured `.zip` files containing Markdown. It supports both claude.ai and chatgpt.com. ChatGPT support currently covers project-scoped export only (single project and multi-project batch); standalone (non-project) ChatGPT conversations are not yet exportable, and non-image ChatGPT file attachments are not yet downloaded — see ChatGPT Export below.
 
 ## Architecture
 
@@ -17,6 +17,10 @@ This is **LLM Vault** - a Chrome extension (Manifest V3) that exports Claude Pro
 - `extension/lib/zipBuilder.js` - Builds the in-memory folder tree and generates the zip Blob via vendored JSZip.
 - `extension/lib/jszip.min.js` - Vendored JSZip (no CDN — Manifest V3 CSP disallows remote code).
 - `extension/content.js` - Content script injected on `claude.ai/project/*` and `claude.ai/chat/*`; scrapes the project's Memory/Instructions text (project pages) and scrapes artifact/content filenames (chat pages) from the DOM on request (no REST API exposes this data). Also injected on `claude.ai/projects` (exact path, no wildcard) to power multi-project selection — see Multi-Project Batch Export below.
+- `extension/content-gpt.js` - Content script injected on `https://chatgpt.com/*`; the ChatGPT counterpart to `content.js`, entirely independent of it (no shared code). Scrapes project instructions, the project's conversation list, individual thread turns, and powers projects-list multi-selection. See ChatGPT Export below.
+- `extension/lib/gptDetect.js` - ChatGPT host/URL detection (`isGptHost`, `gptDetectContext`) — the ChatGPT counterpart to `orgId.js`'s ID extraction.
+- `extension/lib/gptMarkdown.js` - Converts scraped ChatGPT project/thread data to Markdown, including a self-contained HTML→Markdown converter (no Turndown or other library). Builds the project index and instructions files; sanitizes filenames.
+- `extension/lib/gptExport.js` - ChatGPT scrape-and-build pipeline (`gptScrapeProject`, `gptBuildProjectInto`) — the ChatGPT counterpart to `api.js`/`zipBuilder.js`'s combined responsibilities.
 
 ## Key Technical Details
 
@@ -62,6 +66,48 @@ On `claude.ai/recents`, `extension/content.js` implements a fully independent se
 - Conversations fetched in batches of 5, with a 500-750ms delay between batches (750ms above 50 conversations).
 - Individual conversation fetch retries up to 3 times on failure, with exponential backoff starting at 1000ms (capped at 10000ms) on HTTP 429.
 - Partial failures are tolerated: if some conversations fail to fetch, the export still completes with the successful ones, and the status message reports how many failed.
+
+## ChatGPT Export
+
+ChatGPT support is a fully isolated pipeline living in its own files (`extension/lib/gptDetect.js`, `extension/lib/gptMarkdown.js`, `extension/lib/gptExport.js`, `extension/content-gpt.js`, plus the `gpt*`-prefixed functions added to `extension/sidepanel.js`) — none of the existing Claude modules were modified beyond `sidepanel.js`'s top-level routing and the one shared helper noted below. Unlike Claude, chatgpt.com exposes no usable internal REST API for this data from the extension's context, so the entire pipeline is DOM-scraping, driven by navigating the active tab through real pages.
+
+### URL Detection
+`gptDetectContext()` in `extension/lib/gptDetect.js` classifies the active tab's `chatgpt.com` URL into one of three kinds (returns `{kind: null}` for anything else, including non-`chatgpt.com` hosts):
+- **Projects list**: exact path `/projects` → `{kind: 'projects'}`.
+- **Project page**: `/g/g-p-<hex-id>(-<slug>)?/project` → `{kind: 'project', projectId}`.
+- **Conversation page**: `/g/g-p-<hex-id>-<slug>/c/<uuid>` → `{kind: 'conversation', projectId, convId}`.
+
+`isGptHost(url)` checks `hostname === 'chatgpt.com'`. `extension/sidepanel.js`'s `detectContext()` calls `isGptHost()` first and, if true, delegates entirely to `detectGptContext()` — a separate branch from the Claude URL-pattern checks (`getProjectIdFromUrl`/`getConversationIdFromUrl`/etc.), so Claude and ChatGPT routing never intermix. Only the projects-list and project-page kinds currently drive UI (a "Select GPT Projects" button and an "Export GPT Project" button respectively); the conversation kind and anything unrecognized fall through to a generic "navigate to a project" message — standalone conversation export is not implemented.
+
+### Instructions & Conversation List Scraping (Phase 1 & 2)
+On a project page, `content-gpt.js`'s `gptGetProjectMetadata()` clicks the project-details button (`button[aria-label="Afficher les détails du projet"]`), waits for the resulting dialog (`div[role="dialog"] input#project-name`), reads the name/instructions from the dialog's `input#project-name`/`textarea#instructions`, then closes it — falling back to just the page's `<h1>`/`button[name="project-title"]` text (no instructions) if the details button or dialog never appears. `gptGetProjectConversations()` scrapes `<a href*="/c/">` links matching `/\/g\/g-p-[a-f0-9]+-[^/]*\/c\/[a-f0-9-]+/`, de-duplicating by conversation UUID and capturing each link's **real href** (resolved to an absolute `url` via `new URL(href, location.origin)`) plus its title (`.text-sm.font-medium` inside the link, falling back to the UUID). Because the list can lazy-load, `gptWaitForListToStabilize()` auto-scrolls (`window.scrollTo(0, document.body.scrollHeight)`) and polls the link count, resolving after 3 consecutive stable checks (500ms apart) or a 30s timeout, whichever comes first — mirroring the pattern used by Claude's Recents "Select All" stabilization.
+
+### Thread Scraping (Phase 3)
+On a conversation page, `content-gpt.js`'s `gptFindTurns()` selects `section[data-turn-id]` elements; `gptWaitForThreadToStabilize()` de-virtualizes the thread by repeatedly scrolling to the top (to force-load earlier turns) then the bottom, polling the turn count the same way the conversation list is stabilized (3 stable checks / 500ms / 30s timeout) — a comment in the code flags that this relies on the thread scrolling via the document itself (`window.scrollTo`), and would need revisiting if ChatGPT ever moves the thread into an inner scroll container. **Long threads (30+ turns) should be spot-checked against this assumption**, since virtualization behavior is not something the code defends against beyond this scroll-and-poll loop.
+
+Each turn is classified via `[data-message-author-role]`: a `role="user"` turn's text comes from `.whitespace-pre-wrap` inside that element (plain text, stored as `turn.text`); an assistant turn's content comes from the `.markdown` element's `innerHTML` (stored as `turn.html`, converted to Markdown at build time — see below). Image attachments are scraped separately by `gptScrapeThreadImages()`, which finds `<img src*="backend-api">` inside any turn, de-duplicates by `src`, and resolves each to an absolute URL — these become `contentFiles: [{filename, url}]` (filename from the `alt` attribute, falling back to `image_N`). Non-image uploaded files are not scraped at all currently — best-effort/out-of-scope for this pass.
+
+### HTML → Markdown Conversion (no Turndown)
+`extension/lib/gptMarkdown.js` implements its own minimal HTML→Markdown converter (`gptHtmlToMarkdown`) rather than pulling in Turndown or any other library — consistent with the project's no-external-dependency stance (see Code Standards). It walks a parsed DOM tree (built via `DOMParser` in the browser; a fake parser is injected for the Node-based pure-function test) and handles: `H1`–`H6` (via `#`-prefix repetition), `P`, `HR`, `PRE` (fenced code blocks, trailing newline stripped), `BLOCKQUOTE` (`>`-prefixed lines), `UL`/`OL` (`-`/`N.` markers, one level only), and inline `STRONG`/`B` (`**bold**`), `EM`/`I` (`*italic*`), `CODE` (`` `code` ``), `A` (`[text](href)`), and `BR` (newline). Any other block-level tag falls through to a default case that recurses into its children so nested/unexpected markup still surfaces its text rather than being silently dropped; plain text nodes at the block level are emitted as their own paragraph. Output is collapsed (`\n{3,}` → `\n\n`) and trimmed at the end.
+
+### Output Structure
+Every ChatGPT export is a single `.zip` download, built the same vendored-JSZip way as Claude exports:
+- **Single project**: `gpt_project_<sanitized-name>.zip` containing `index.md` at the root (project name heading + a `## Conversations` list linking to each conversation's `conversation.md`), `instructions.md` **only if the scraped instructions were non-empty** (unlike Claude's Memory/Instructions files, which are separately optional), and one folder per conversation (`gptConvFolderName()`: `<sanitized-title>_<uuid8>`), each containing `conversation.md` and a `contenu-gpt/` folder (image attachments fetched via the shared `fetchFilesInto()` helper, falling back to empty if none/all failed — same fallback convention as Claude's `contenu`/`artefacts`/`fichiers`).
+- **Multi-project batch**: `gpt_projects_batch_<succeeded-count>.zip`, one JSZip subfolder per project (named from the scraped project name, via `gptBuildProjectInto(zip, folderName, ...)`), same per-project contents as the single-project case, combined into one zip the same way Claude's multi-project batch nests into one `JSZip` instance.
+- There is **no** `artefacts/` folder, `memory.md`, or `fichiers/` in ChatGPT output — those are Claude-specific concepts (Claude-generated sandbox artifacts and project knowledge files) with no ChatGPT equivalent scraped yet.
+
+### Multi-Project Selection (index-based, no UUID/href)
+Unlike Claude's project list (which has real per-project links/UUIDs), ChatGPT's projects-list rows (`div[role="row"][data-page-table-selectable-row="true"]` inside `div[role="grid"][aria-label="Projets"]`) expose no href or UUID — clicking a row triggers client-side navigation with no URL to read beforehand. `content-gpt.js` therefore keys selection by **row index**: `gptHandleSelectionClick()` (attached capture-phase, `{type: 'START_GPT_SELECTION_MODE'}`) finds the clicked row's position via `gptFindProjectRows().indexOf(row)` and toggles it in a `Map<index, name>` — the **name is captured at click time** (`gptRowName()`, reading `.text-token-text-primary.truncate`) specifically so a later list reorder/filter can't change what name is later reported for that index. `{type: 'GET_GPT_SELECTED_PROJECTS'}` returns `[{index, name}]`; `{type: 'STOP_GPT_SELECTION_MODE'}` clears the `Map` and CSS outline.
+
+Because navigating away from the list and back can still reorder/refilter rows before the batch reaches a given index, `runGptBatch()` in `sidepanel.js` re-navigates to `https://chatgpt.com/projects` before every project (not just once), sends `{type: 'NAVIGATE_GPT_PROJECT', index}` (which clicks the row's `[role="gridcell"]` and returns the name read at navigation time), waits for the project URL to appear (`waitForGptProjectUrl()`, polling the tab's URL), then runs `gptScrapeProject()` — and, as a **guardrail**, compares the project name scraped from the destination page against the name captured at selection time; if they disagree, the project is skipped and recorded as `"<expectedName> (mismatch: got \"<scrapedName>\")"` rather than exporting the wrong project's data under the selected name. A project that fails at any step (navigation timeout, empty conversation list, name mismatch, scrape error) is recorded and skipped; the batch continues with the rest, and (mirroring Claude's batch) no zip is generated if every project fails.
+
+### Shared Helper Change: `waitForContentScriptReady`
+`waitForContentScriptReady()` in `extension/sidepanel.js` is shared, unmodified in its role, between Claude and ChatGPT flows, but its pathname check was relaxed from exact equality to substring (`response.pathname.includes(expectedPathname)`) to accommodate ChatGPT's URL shape — a conversation path like `/g/g-p-<id>-<slug>/c/<uuid>` needs to match on the `/c/<uuid>` suffix without the caller having to reconstruct the full path (including the arbitrary `-<slug>` segment) up front. This is a behavior-preserving generalization for Claude's own exact-path use sites (an `includes` check still matches an exact equal string).
+
+### Known Limitations
+- Non-image uploaded files in a ChatGPT conversation are not downloaded — only image attachments (`backend-api` `<img>` thumbnails) are captured into `contenu-gpt/`.
+- Long-thread de-virtualization relies on `window.scrollTo` against the document; this should be verified against real 30+ turn threads, since the code does not detect or adapt to an inner-scroll-container layout if ChatGPT changes it.
+- Standalone (non-project) ChatGPT conversations are not exportable — `gptDetectContext`'s `'conversation'` kind is recognized but has no export UI/pipeline wired to it yet.
 
 ## Development Guidelines
 
