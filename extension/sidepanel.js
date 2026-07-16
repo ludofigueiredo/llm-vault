@@ -102,9 +102,53 @@ async function captureProjectConversationImages(tabId, conversations, artifactsD
   }
 }
 
+function detectGptContext(url, tab) {
+  const exportBtn = document.getElementById('export-btn');
+  const selectProjectsBtn = document.getElementById('select-projects-btn');
+  const confirmSelectionBtn = document.getElementById('confirm-selection-btn');
+  const selectRecentsBtn = document.getElementById('select-recents-btn');
+  const selectAllRecentsBtn = document.getElementById('select-all-recents-btn');
+  const confirmRecentsSelectionBtn = document.getElementById('confirm-recents-selection-btn');
+  const contextMessage = document.getElementById('context-message');
+
+  // Hide all Claude-specific controls we won't use.
+  [selectRecentsBtn, selectAllRecentsBtn, confirmRecentsSelectionBtn].forEach((b) => { if (b) b.style.display = 'none'; });
+
+  const ctx = gptDetectContext(url);
+
+  if (ctx.kind === 'projects') {
+    contextMessage.textContent = 'ChatGPT — select projects to export.';
+    exportBtn.style.display = 'none';
+    confirmSelectionBtn.style.display = 'none';
+    selectProjectsBtn.style.display = 'block';
+    selectProjectsBtn.textContent = 'Select GPT Projects';
+    selectProjectsBtn.onclick = startGptSelection;
+    return;
+  }
+  if (ctx.kind === 'project') {
+    contextMessage.textContent = 'ChatGPT project detected.';
+    selectProjectsBtn.style.display = 'none';
+    confirmSelectionBtn.style.display = 'none';
+    exportBtn.style.display = 'block';
+    exportBtn.textContent = 'Export GPT Project';
+    exportBtn.disabled = false;
+    exportBtn.onclick = () => startGptProjectExport(url, tab);
+    return;
+  }
+  // conversation or unrelated GPT page
+  contextMessage.textContent = 'Navigate to a ChatGPT project or the projects list to export.';
+  exportBtn.style.display = 'none';
+  selectProjectsBtn.style.display = 'none';
+  confirmSelectionBtn.style.display = 'none';
+}
+
 async function detectContext() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab.url || '';
+
+  if (isGptHost(url)) {
+    return detectGptContext(url, tab);
+  }
 
   const contextMessage = document.getElementById('context-message');
   const exportBtn = document.getElementById('export-btn');
@@ -195,7 +239,7 @@ function waitForContentScriptReady(tabId, timeoutMs, expectedPathname) {
         // has only been initiated, not completed) — require the responding
         // page's own pathname to match the page we just navigated to, so we
         // don't proceed against the wrong page's content script.
-        if (response && response.pong && (!expectedPathname || response.pathname === expectedPathname)) {
+        if (response && response.pong && (!expectedPathname || response.pathname.includes(expectedPathname))) {
           resolve(true);
           return;
         }
