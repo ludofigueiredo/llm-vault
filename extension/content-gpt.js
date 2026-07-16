@@ -163,7 +163,7 @@ async function gptGetConversation() {
 }
 
 const GPT_SELECTED_CLASS = 'llmvault-gpt-selected';
-let gptSelectedIndices = new Set();
+let gptSelectedProjectsByIndex = new Map(); // index -> name captured at click time
 let gptSelectionClickListener = null;
 
 function gptEnsureSelectionStyle() {
@@ -199,11 +199,13 @@ function gptHandleSelectionClick(event) {
   const rows = gptFindProjectRows();
   const index = rows.indexOf(row);
   if (index < 0) return;
-  if (gptSelectedIndices.has(index)) {
-    gptSelectedIndices.delete(index);
+  if (gptSelectedProjectsByIndex.has(index)) {
+    gptSelectedProjectsByIndex.delete(index);
     row.classList.remove(GPT_SELECTED_CLASS);
   } else {
-    gptSelectedIndices.add(index);
+    // Capture the name now, at click time, so a later list reorder can't
+    // make the returned name disagree with what the user actually picked.
+    gptSelectedProjectsByIndex.set(index, gptRowName(row));
     row.classList.add(GPT_SELECTED_CLASS);
   }
 }
@@ -212,17 +214,16 @@ function gptStartSelectionMode() {
   const grid = gptFindProjectGrid();
   if (!grid) return false;
   gptEnsureSelectionStyle();
-  gptSelectedIndices = new Set();
+  gptSelectedProjectsByIndex = new Map();
   gptSelectionClickListener = gptHandleSelectionClick;
   grid.addEventListener('click', gptSelectionClickListener, true);
   return true;
 }
 
 function gptGetSelectedProjects() {
-  const rows = gptFindProjectRows();
   const results = [];
-  for (const index of gptSelectedIndices) {
-    if (rows[index]) results.push({ index, name: gptRowName(rows[index]) });
+  for (const [index, name] of gptSelectedProjectsByIndex) {
+    results.push({ index, name });
   }
   return results;
 }
@@ -234,7 +235,7 @@ function gptStopSelectionMode() {
   }
   gptSelectionClickListener = null;
   for (const row of gptFindProjectRows()) row.classList.remove(GPT_SELECTED_CLASS);
-  gptSelectedIndices = new Set();
+  gptSelectedProjectsByIndex = new Map();
 }
 
 function gptNavigateProject(index) {
