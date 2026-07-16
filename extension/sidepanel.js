@@ -824,6 +824,11 @@ async function startGptProjectExport(url, tab) {
   } finally {
     batchInProgress = false;
     exportBtn.disabled = false;
+    // The tab is now on the last conversation page; re-sync the panel so it
+    // reflects the tab's actual context instead of a stale "Export" button.
+    // detectGptContext only touches #context-message, so the success/error
+    // #status set above is preserved.
+    detectContext();
   }
 }
 
