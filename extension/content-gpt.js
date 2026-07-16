@@ -162,6 +162,92 @@ async function gptGetConversation() {
   return { turns, contentFiles: gptScrapeThreadImages() };
 }
 
+const GPT_SELECTED_CLASS = 'llmvault-gpt-selected';
+let gptSelectedIndices = new Set();
+let gptSelectionClickListener = null;
+
+function gptEnsureSelectionStyle() {
+  if (document.getElementById('llmvault-gpt-style')) return;
+  const style = document.createElement('style');
+  style.id = 'llmvault-gpt-style';
+  style.textContent = `.${GPT_SELECTED_CLASS} { outline: 2px solid #e74c3c !important; outline-offset: -2px; }`;
+  document.head.appendChild(style);
+}
+
+function gptFindProjectGrid() {
+  return document.querySelector('div[role="grid"][aria-label="Projets"]');
+}
+
+function gptFindProjectRows() {
+  const grid = gptFindProjectGrid();
+  if (!grid) return [];
+  return [...grid.querySelectorAll('div[role="row"][data-page-table-selectable-row="true"]')];
+}
+
+function gptRowName(row) {
+  const nameEl = row.querySelector('.text-token-text-primary.truncate');
+  return nameEl ? nameEl.textContent.trim() : '';
+}
+
+function gptHandleSelectionClick(event) {
+  const row = event.target.closest('div[role="row"][data-page-table-selectable-row="true"]');
+  if (!row) return;
+  const grid = gptFindProjectGrid();
+  if (!grid || !grid.contains(row)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const rows = gptFindProjectRows();
+  const index = rows.indexOf(row);
+  if (index < 0) return;
+  if (gptSelectedIndices.has(index)) {
+    gptSelectedIndices.delete(index);
+    row.classList.remove(GPT_SELECTED_CLASS);
+  } else {
+    gptSelectedIndices.add(index);
+    row.classList.add(GPT_SELECTED_CLASS);
+  }
+}
+
+function gptStartSelectionMode() {
+  const grid = gptFindProjectGrid();
+  if (!grid) return false;
+  gptEnsureSelectionStyle();
+  gptSelectedIndices = new Set();
+  gptSelectionClickListener = gptHandleSelectionClick;
+  grid.addEventListener('click', gptSelectionClickListener, true);
+  return true;
+}
+
+function gptGetSelectedProjects() {
+  const rows = gptFindProjectRows();
+  const results = [];
+  for (const index of gptSelectedIndices) {
+    if (rows[index]) results.push({ index, name: gptRowName(rows[index]) });
+  }
+  return results;
+}
+
+function gptStopSelectionMode() {
+  const grid = gptFindProjectGrid();
+  if (grid && gptSelectionClickListener) {
+    grid.removeEventListener('click', gptSelectionClickListener, true);
+  }
+  gptSelectionClickListener = null;
+  for (const row of gptFindProjectRows()) row.classList.remove(GPT_SELECTED_CLASS);
+  gptSelectedIndices = new Set();
+}
+
+function gptNavigateProject(index) {
+  const rows = gptFindProjectRows();
+  const row = rows[index];
+  if (!row) return { navigated: false, name: '' };
+  const name = gptRowName(row);
+  // The row's first gridcell is the clickable navigation target.
+  const target = row.querySelector('[role="gridcell"]') || row;
+  target.click();
+  return { navigated: true, name };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'PING') {
     sendResponse({ pong: true, pathname: window.location.pathname });
@@ -178,6 +264,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'GET_GPT_CONVERSATION') {
     gptGetConversation().then(sendResponse);
     return true;
+  }
+  if (message && message.type === 'START_GPT_SELECTION_MODE') {
+    sendResponse({ armed: gptStartSelectionMode() });
+    return false;
+  }
+  if (message && message.type === 'GET_GPT_SELECTED_PROJECTS') {
+    sendResponse(gptGetSelectedProjects());
+    return false;
+  }
+  if (message && message.type === 'STOP_GPT_SELECTION_MODE') {
+    gptStopSelectionMode();
+    sendResponse({ stopped: true });
+    return false;
+  }
+  if (message && message.type === 'NAVIGATE_GPT_PROJECT') {
+    sendResponse(gptNavigateProject(message.index));
+    return false;
   }
   return false;
 });
