@@ -103,6 +103,8 @@ async function captureProjectConversationImages(tabId, conversations, artifactsD
 }
 
 function detectGptContext(url, tab) {
+  if (selectionMode || batchInProgress) return;
+
   const exportBtn = document.getElementById('export-btn');
   const selectProjectsBtn = document.getElementById('select-projects-btn');
   const confirmSelectionBtn = document.getElementById('confirm-selection-btn');
@@ -785,4 +787,145 @@ async function runExport() {
   } finally {
     exportBtn.disabled = false;
   }
+}
+
+// Shared download trigger — matches the inline URL.createObjectURL +
+// chrome.downloads.download + revokeObjectURL pattern used by every
+// Claude export path above (no standalone helper previously existed).
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  chrome.downloads.download({ url, filename, saveAs: false }, () => {
+    URL.revokeObjectURL(url);
+  });
+}
+
+async function startGptProjectExport(url, tab) {
+  const exportBtn = document.getElementById('export-btn');
+  const status = document.getElementById('status');
+  exportBtn.disabled = true;
+  batchInProgress = true;
+  status.className = '';
+  status.textContent = 'Scraping GPT project...';
+  try {
+    const scraped = await gptScrapeProject(tab.id, url, (n, total, name) => {
+      status.textContent = `Conversation ${n}/${total}: ${name}...`;
+    });
+    status.textContent = 'Building zip...';
+    const zip = new JSZip();
+    await gptBuildProjectInto(zip, null, scraped.project, scraped.conversations);
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const safeName = gptSanitizeFilename(scraped.project.name || 'projet');
+    triggerDownload(blob, `gpt_project_${safeName}.zip`);
+    status.className = 'success';
+    status.textContent = 'Export complete.';
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = 'Export failed: ' + e.message;
+  } finally {
+    batchInProgress = false;
+    exportBtn.disabled = false;
+  }
+}
+
+async function startGptSelection() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const resp = await chrome.tabs.sendMessage(tab.id, { type: 'START_GPT_SELECTION_MODE' });
+  if (!resp || !resp.armed) return;
+  selectionMode = true;
+  const selectBtn = document.getElementById('select-projects-btn');
+  const confirmBtn = document.getElementById('confirm-selection-btn');
+  selectBtn.style.display = 'none';
+  confirmBtn.style.display = 'block';
+  confirmBtn.textContent = 'Confirm Selection (0)';
+  confirmBtn.onclick = () => confirmGptSelection(tab);
+
+  const poll = setInterval(async () => {
+    if (!selectionMode) { clearInterval(poll); return; }
+    try {
+      const sel = await chrome.tabs.sendMessage(tab.id, { type: 'GET_GPT_SELECTED_PROJECTS' });
+      confirmBtn.textContent = `Confirm Selection (${(sel || []).length})`;
+    } catch (e) { /* tab navigated away; ignore */ }
+  }, 500);
+}
+
+async function confirmGptSelection(tab) {
+  const selected = await chrome.tabs.sendMessage(tab.id, { type: 'GET_GPT_SELECTED_PROJECTS' });
+  await chrome.tabs.sendMessage(tab.id, { type: 'STOP_GPT_SELECTION_MODE' });
+  selectionMode = false;
+  if (!selected || selected.length === 0) return;
+  await runGptBatch(selected, tab);
+}
+
+async function runGptBatch(selected, tab) {
+  const status = document.getElementById('status');
+  const confirmBtn = document.getElementById('confirm-selection-btn');
+  confirmBtn.style.display = 'none';
+  batchInProgress = true;
+  status.className = '';
+  const zip = new JSZip();
+  const failed = [];
+  let succeeded = 0;
+
+  for (let i = 0; i < selected.length; i++) {
+    const proj = selected[i];
+    status.textContent = `Project ${i + 1}/${selected.length}: ${proj.name}...`;
+    try {
+      // Navigate by clicking the row (GPT rows have no href). We must be
+      // back on the projects listing for the index to be valid.
+      await chrome.tabs.update(tab.id, { url: 'https://chatgpt.com/projects' });
+      await waitForContentScriptReady(tab.id, 15000, '/projects');
+      const nav = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
+      if (!nav || !nav.navigated) { failed.push(proj.name); continue; }
+      // Wait for the project URL to appear, then scrape from it.
+      const projectUrl = await waitForGptProjectUrl(tab.id, 15000);
+      if (!projectUrl) { failed.push(proj.name); continue; }
+      const scraped = await gptScrapeProject(tab.id, projectUrl, (n, total, name) => {
+        status.textContent = `Project ${i + 1}/${selected.length} — conv ${n}/${total}: ${name}...`;
+      });
+      const scrapedName = (scraped.project && scraped.project.name || '').trim();
+      const expectedName = (proj.name || '').trim();
+      if (expectedName && scrapedName && scrapedName !== expectedName) {
+        // Row index may have pointed at a different project than the one
+        // clicked (the list can reorder/filter between selecting and
+        // navigating). Skip rather than export the wrong project.
+        failed.push(`${expectedName} (mismatch: got "${scrapedName}")`);
+        continue;
+      }
+      const folderName = gptSanitizeFilename(scraped.project.name || proj.name);
+      await gptBuildProjectInto(zip, folderName, scraped.project, scraped.conversations);
+      succeeded++;
+    } catch (e) {
+      failed.push(proj.name);
+    }
+  }
+
+  batchInProgress = false;
+  if (succeeded === 0) {
+    status.className = 'error';
+    status.textContent = 'All projects failed: ' + failed.join(', ');
+    return;
+  }
+  status.textContent = 'Building zip...';
+  const blob = await zip.generateAsync({ type: 'blob' });
+  triggerDownload(blob, `gpt_projects_batch_${succeeded}.zip`);
+  status.className = 'success';
+  status.textContent = `Exported ${succeeded} project(s).` + (failed.length ? ` Failed: ${failed.join(', ')}` : '');
+}
+
+// After NAVIGATE_GPT_PROJECT, the React app changes the tab URL to the
+// project page. Poll the tab URL until it matches /g/g-p-.../project.
+function waitForGptProjectUrl(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const poll = async () => {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        const ctx = gptDetectContext(tab.url || '');
+        if (ctx.kind === 'project') { resolve(tab.url); return; }
+      } catch (e) { /* ignore */ }
+      if (Date.now() - start >= timeoutMs) { resolve(null); return; }
+      setTimeout(poll, 300);
+    };
+    poll();
+  });
 }
