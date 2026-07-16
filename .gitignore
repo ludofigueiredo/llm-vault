@@ -85,3 +85,4 @@ yarn-error.log*
 
 # Scratch HTML snapshots captured for reference during development
 /snippet-claude-website
+/snippet-gpt-website
