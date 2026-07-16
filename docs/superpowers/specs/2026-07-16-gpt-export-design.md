@@ -28,15 +28,14 @@ Therefore GPT gets its own files (prefix `gpt`), and the existing Claude code is
 |---|---|
 | `extension/lib/gptDetect.js` | Detect GPT context from URL + extract IDs. Mirror of `orgId.js`. |
 | `extension/content-gpt.js` | Content script on `chatgpt.com/*`: multi-project selection (row click), scrape instructions (settings popover), scrape conversation list (hrefs), scrape a thread's messages (auto-scroll + `data-message-author-role`), scrape images/files. Fully distinct from `content.js`. |
-| `extension/lib/gptMarkdown.js` | GPT messages → markdown, `instructions.md`, `index.md`. Mirror of `markdown.js`. Uses vendored Turndown for assistant HTML→markdown. |
+| `extension/lib/gptMarkdown.js` | GPT messages → markdown, `instructions.md`, `index.md`. Mirror of `markdown.js`. Includes a small self-contained HTML→markdown converter for assistant content (no external dependency). |
 | `extension/lib/gptExport.js` | Orchestrates the GPT pipeline (navigation, scrape, build zip), called by the side panel. |
-| `extension/lib/turndown.min.js` | Vendored Turndown (HTML→Markdown), loaded via `<script>` (no CDN — MV3 CSP), same pattern as `jszip.min.js`. |
 
 ### Modified files (minimal wiring only)
 
-- `manifest.json`: add `https://chatgpt.com/*` host permission + a new `content_scripts` block for `content-gpt.js`; add `turndown.min.js`.
+- `manifest.json`: add `https://chatgpt.com/*` host permission + a new `content_scripts` block for `content-gpt.js`.
 - `sidepanel.js`: `detectContext()` inspects the active tab's `hostname` first. `chatgpt.com` → delegate to `detectGptContext()` (GPT UI). `claude.ai` → existing behavior unchanged.
-- `sidepanel.html`: reuse the same buttons/status area (GPT UI is near-identical: "Select projects" → "Confirm (N)" → progress bar); load the new GPT scripts + Turndown.
+- `sidepanel.html`: reuse the same buttons/status area (GPT UI is near-identical: "Select projects" → "Confirm (N)" → progress bar); load the new GPT scripts.
 
 ### Reused as-is (no duplication)
 
@@ -86,7 +85,7 @@ For each `convId`: `chrome.tabs.update` to the conversation URL → wait for con
 Status shown: `"Projet X — conversation N/Total : <titre>..."`.
 
 ### Assistant HTML→Markdown
-Assistant content is rendered HTML (`.markdown.prose`). Converted with **vendored Turndown** (`turndown.min.js`), used by `gptMarkdown.js` on the panel side to convert the HTML strings sent up by the content script. User messages are plain text (`whitespace-pre-wrap`), used as-is.
+Assistant content is rendered HTML (`.markdown.prose`). Converted with a **small self-contained HTML→markdown converter** inside `gptMarkdown.js` (no external dependency, consistent with the "vanilla JS, no CDN" project philosophy), covering the tags actually seen in GPT threads: `p`, `strong`/`b`, `em`/`i`, `h1`–`h6`, `hr`, `ul`/`ol`/`li`, `code`, `pre`, `blockquote`, `a`, `br`. It walks the DOM of the HTML string (parsed via `DOMParser` in the panel) and emits markdown. User messages are plain text (`whitespace-pre-wrap`), used as-is.
 
 ## 5. Output structure (mirrors Claude, adapted for GPT)
 

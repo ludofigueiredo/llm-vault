@@ -4,9 +4,9 @@
 
 **Goal:** Add an isolated ChatGPT (chatgpt.com) export feature to the LLM Vault Chrome extension — instructions + full conversations per project — output as a `.zip` mirroring the Claude export's folder philosophy.
 
-**Architecture:** GPT support is pure DOM scraping (no REST API), driven by the side panel navigating the active tab. It lives in its own `gpt*` modules and a separate content script (`content-gpt.js`); the existing Claude code is untouched except for minimal routing/manifest wiring. The provider-agnostic `fetchFilesInto()` and vendored JSZip are reused; a vendored Turndown converts assistant HTML to markdown.
+**Architecture:** GPT support is pure DOM scraping (no REST API), driven by the side panel navigating the active tab. It lives in its own `gpt*` modules and a separate content script (`content-gpt.js`); the existing Claude code is untouched except for minimal routing/manifest wiring. The provider-agnostic `fetchFilesInto()` and vendored JSZip are reused; a small self-contained HTML→markdown converter (in `gptMarkdown.js`, no external dependency) converts assistant HTML to markdown.
 
-**Tech Stack:** Vanilla JS, Chrome Manifest V3, vendored JSZip, vendored Turndown. No bundler, no ES modules, no CDN (MV3 CSP).
+**Tech Stack:** Vanilla JS, Chrome Manifest V3, vendored JSZip. No bundler, no ES modules, no CDN (MV3 CSP).
 
 ## Global Constraints
 
@@ -24,13 +24,12 @@
 ## File Structure
 
 - Create: `extension/lib/gptDetect.js` — URL context detection + ID extraction (pure functions).
-- Create: `extension/lib/gptMarkdown.js` — conversation→markdown, `instructions.md`, `index.md`; wraps Turndown.
+- Create: `extension/lib/gptMarkdown.js` — conversation→markdown, `instructions.md`, `index.md`; includes a self-contained HTML→markdown converter.
 - Create: `extension/lib/gptExport.js` — GPT pipeline orchestration + GPT zip building (uses `fetchFilesInto`).
 - Create: `extension/content-gpt.js` — GPT content script (selection, instructions, conversation list, thread scrape).
-- Create: `extension/lib/turndown.min.js` — vendored Turndown.
 - Create: `test/gptDetect.test.js`, `test/gptMarkdown.test.js` — Node-runnable pure-function checks.
 - Modify: `extension/manifest.json` — add chatgpt.com host permission + content_scripts block.
-- Modify: `extension/sidepanel.html` — load new scripts + Turndown.
+- Modify: `extension/sidepanel.html` — load new scripts.
 - Modify: `extension/sidepanel.js` — host-based routing in `detectContext()` + `detectGptContext()` + GPT batch driver.
 
 ---
@@ -138,52 +137,21 @@ git commit -m "feat: add GPT URL context detection"
 
 ---
 
-## Task 2: Vendor Turndown
-
-**Files:**
-- Create: `extension/lib/turndown.min.js`
-
-**Interfaces:**
-- Produces: global `TurndownService` (browser), used by Task 3.
-
-- [ ] **Step 1: Fetch the vendored library**
-
-Download the UMD build of Turndown (v7.x) into the repo. Run:
-```bash
-curl -L -o extension/lib/turndown.min.js https://unpkg.com/turndown@7.2.0/dist/turndown.js
-```
-
-- [ ] **Step 2: Verify it loaded and is non-empty**
-
-Run:
-```bash
-node -e "const t=require('./extension/lib/turndown.min.js'); const s=new t(); console.log(s.turndown('<p>hi <strong>there</strong></p>'))"
-```
-Expected: prints `hi **there**` (confirms the file is a working UMD Turndown build). If `require` fails because the build is browser-only UMD, instead verify size is > 10KB: `wc -c extension/lib/turndown.min.js` and eyeball the file starts with the Turndown header comment.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add extension/lib/turndown.min.js
-git commit -m "build: vendor Turndown for GPT HTML->markdown"
-```
-
----
-
-## Task 3: GPT markdown builders
+## Task 2: GPT markdown builders (incl. self-contained HTML→markdown converter)
 
 **Files:**
 - Create: `extension/lib/gptMarkdown.js`
 - Test: `test/gptMarkdown.test.js`
 
 **Interfaces:**
-- Consumes: global `TurndownService` (Task 2).
+- Consumes: nothing (self-contained; no external HTML→markdown library).
 - Produces:
-  - `gptTurnsToMarkdown(project, turns) -> string` — `turns` is `[{ role: 'user'|'assistant', text?: string, html?: string }]`; assistant turns carry `html`, user turns carry `text`.
+  - `gptHtmlToMarkdown(html, doc?) -> string` — converts an assistant HTML string to markdown. `doc` is an optional document-like object exposing `createElement`/parsing; in the browser it defaults to using `DOMParser`. In Node the test passes a minimal fake (see below), so the function must accept an injected parser and NOT reference `DOMParser`/`document` when one is supplied.
+  - `gptTurnsToMarkdown(project, turns, htmlToMd?) -> string` — `turns` is `[{ role: 'user'|'assistant', text?: string, html?: string }]`; assistant turns carry `html`, user turns carry `text`. `htmlToMd` is an optional converter injected for testing; defaults to `gptHtmlToMarkdown`.
   - `gptInstructionsMarkdown(project) -> string` — `project` is `{ name, instructions }`.
   - `gptIndexMarkdown(project, conversations) -> string` — `conversations` is `[{ title, convId }]`.
   - `gptConvFolderName(conv) -> string` — `<sanitized-title>_<convId first 8>`.
-- Note: `gptMarkdown.js` must work both in the browser (uses `new TurndownService()`) and under Node for the test. The test injects a fake `TurndownService` on `global` before requiring, so `gptMarkdown.js` must read `TurndownService` lazily (inside the function), not at module load.
+- Note: `gptMarkdown.js` must load under Node (for the test) without touching browser globals at module load. Any use of `DOMParser`/`document` must be lazy (inside a function) and guarded so the test can inject a converter and avoid them entirely.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -191,25 +159,25 @@ git commit -m "build: vendor Turndown for GPT HTML->markdown"
 ```js
 const assert = require('assert');
 
-// Fake Turndown so the pure builder logic is testable in Node.
-global.TurndownService = class {
-  turndown(html) { return html.replace(/<[^>]+>/g, '').trim(); }
-};
-
 const {
   gptTurnsToMarkdown,
   gptInstructionsMarkdown,
   gptIndexMarkdown,
   gptConvFolderName,
+  gptHtmlToMarkdown,
 } = require('../extension/lib/gptMarkdown.js');
 
-// conversation markdown: user text verbatim, assistant html via turndown
+// A trivial injected converter proves gptTurnsToMarkdown routes assistant
+// html through htmlToMd and user text verbatim, without needing a DOM.
+const fakeHtmlToMd = (html) => html.replace(/<[^>]+>/g, '').trim();
+
 const md = gptTurnsToMarkdown(
   { name: 'CV 2026' },
   [
     { role: 'user', text: 'Salut GPT' },
     { role: 'assistant', html: '<p>Bonjour</p>' },
-  ]
+  ],
+  fakeHtmlToMd
 );
 assert.ok(md.includes('## Vous'), 'has user heading');
 assert.ok(md.includes('Salut GPT'), 'has user text');
@@ -234,6 +202,34 @@ assert.strictEqual(
   gptConvFolderName({ title: 'Avis: CV/2026', convId: '692955e1-3d78-8325-b019-7a4326ada801' }),
   'Avis_ CV_2026_692955e1'
 );
+
+// HTML->markdown converter, driven by an injected minimal DOM so it runs
+// in Node. The converter walks nodes; we feed it a tiny tree covering the
+// core tags. `parse` returns a root node with .childNodes; each node has
+// nodeType (1=element,3=text), nodeName (upper-case tag), textContent,
+// childNodes, and getAttribute(name).
+function el(name, children, attrs) {
+  return {
+    nodeType: 1,
+    nodeName: name.toUpperCase(),
+    childNodes: children || [],
+    getAttribute: (k) => (attrs && attrs[k]) || null,
+    get textContent() { return (this.childNodes || []).map(n => n.textContent).join(''); },
+  };
+}
+function txt(s) { return { nodeType: 3, nodeName: '#text', textContent: s, childNodes: [] }; }
+
+const fakeParse = () => el('body', [
+  el('p', [txt('Voici un retour '), el('strong', [txt('solide')]), txt('.')]),
+  el('h1', [txt('Titre')]),
+  el('ul', [el('li', [txt('un')]), el('li', [txt('deux')])]),
+]);
+
+const outMd = gptHtmlToMarkdown('<ignored/>', { parse: fakeParse });
+assert.ok(outMd.includes('Voici un retour **solide**.'), 'bold inline: ' + outMd);
+assert.ok(outMd.includes('# Titre'), 'h1: ' + outMd);
+assert.ok(outMd.includes('- un'), 'li 1: ' + outMd);
+assert.ok(outMd.includes('- deux'), 'li 2: ' + outMd);
 
 console.log('gptMarkdown: all assertions passed');
 ```
@@ -261,14 +257,107 @@ function gptConvFolderName(conv) {
   return `${title}_${short}`;
 }
 
-function gptTurnsToMarkdown(project, turns) {
-  const td = new TurndownService();
+// --- Self-contained HTML -> Markdown -------------------------------------
+// Walks a parsed DOM tree and emits markdown for the tags GPT threads use.
+// `parser` must expose parse(html) -> root node whose descendants have:
+// nodeType (1 element / 3 text), nodeName (upper-case), childNodes,
+// textContent, getAttribute(name). In the browser we build this from
+// DOMParser; the test injects a fake parser so no browser globals are used.
+
+function gptDefaultParser() {
+  return {
+    parse(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      return doc.body;
+    },
+  };
+}
+
+function gptInlineToMd(node) {
+  if (node.nodeType === 3) return node.textContent;
+  const inner = (node.childNodes || []).map(gptInlineToMd).join('');
+  switch (node.nodeName) {
+    case 'STRONG':
+    case 'B':
+      return `**${inner}**`;
+    case 'EM':
+    case 'I':
+      return `*${inner}*`;
+    case 'CODE':
+      return `\`${inner}\``;
+    case 'A': {
+      const href = node.getAttribute('href') || '';
+      return href ? `[${inner}](${href})` : inner;
+    }
+    case 'BR':
+      return '\n';
+    default:
+      return inner;
+  }
+}
+
+function gptBlockToMd(node, out) {
+  const name = node.nodeName;
+  if (node.nodeType === 3) {
+    const t = node.textContent.trim();
+    if (t) out.push(t, '');
+    return;
+  }
+  if (/^H[1-6]$/.test(name)) {
+    const level = Number(name[1]);
+    out.push(`${'#'.repeat(level)} ${gptInlineToMd(node).trim()}`, '');
+    return;
+  }
+  switch (name) {
+    case 'P':
+      out.push(gptInlineToMd(node).trim(), '');
+      return;
+    case 'HR':
+      out.push('---', '');
+      return;
+    case 'PRE': {
+      const code = node.textContent.replace(/\n$/, '');
+      out.push('```', code, '```', '');
+      return;
+    }
+    case 'BLOCKQUOTE':
+      out.push(gptInlineToMd(node).trim().split('\n').map((l) => `> ${l}`).join('\n'), '');
+      return;
+    case 'UL':
+    case 'OL': {
+      let i = 1;
+      for (const li of node.childNodes || []) {
+        if (li.nodeName !== 'LI') continue;
+        const marker = name === 'OL' ? `${i++}.` : '-';
+        out.push(`${marker} ${gptInlineToMd(li).trim()}`);
+      }
+      out.push('');
+      return;
+    }
+    default: {
+      // Unknown block: recurse into children so nested content survives.
+      for (const child of node.childNodes || []) gptBlockToMd(child, out);
+    }
+  }
+}
+
+function gptHtmlToMarkdown(html, parser) {
+  const p = parser || gptDefaultParser();
+  const root = p.parse(html);
+  const out = [];
+  for (const child of root.childNodes || []) gptBlockToMd(child, out);
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+// -------------------------------------------------------------------------
+
+function gptTurnsToMarkdown(project, turns, htmlToMd) {
+  const convert = htmlToMd || gptHtmlToMarkdown;
   const lines = [`# ${project.name || 'Conversation'}`, ''];
   for (const turn of turns) {
     if (turn.role === 'user') {
       lines.push('## Vous', '', (turn.text || '').trim(), '');
     } else {
-      const body = turn.html ? td.turndown(turn.html) : (turn.text || '');
+      const body = turn.html ? convert(turn.html) : (turn.text || '');
       lines.push('## ChatGPT', '', body.trim(), '');
     }
   }
@@ -303,6 +392,7 @@ if (typeof module !== 'undefined' && module.exports) {
     gptIndexMarkdown,
     gptConvFolderName,
     gptSanitizeFilename,
+    gptHtmlToMarkdown,
   };
 }
 ```
@@ -316,12 +406,12 @@ Expected: PASS — prints `gptMarkdown: all assertions passed`.
 
 ```bash
 git add extension/lib/gptMarkdown.js test/gptMarkdown.test.js
-git commit -m "feat: add GPT markdown builders"
+git commit -m "feat: add GPT markdown builders with self-contained HTML->markdown"
 ```
 
 ---
 
-## Task 4: GPT content script — instructions & conversation list scraping
+## Task 3: GPT content script — instructions & conversation list scraping
 
 **Files:**
 - Create: `extension/content-gpt.js`
@@ -494,7 +584,7 @@ git commit -m "feat: GPT content script — instructions & conversation list scr
 
 ---
 
-## Task 5: GPT content script — thread scraping (messages, images, files)
+## Task 4: GPT content script — thread scraping (messages, images, files)
 
 **Files:**
 - Modify: `extension/content-gpt.js`
@@ -502,7 +592,7 @@ git commit -m "feat: GPT content script — instructions & conversation list scr
 **Interfaces:**
 - Produces (new message handler):
   - `GET_GPT_CONVERSATION` → `{ turns: [{ role, text?, html? }], contentFiles: [{ filename, url }] }` (async — auto-scrolls thread then scrapes)
-- Consumes: `gptWaitForCondition` (Task 4, same file).
+- Consumes: `gptWaitForCondition` (Task 3, same file).
 
 - [ ] **Step 1: Add thread-scraping functions**
 
@@ -603,7 +693,7 @@ git commit -m "feat: GPT content script — thread message & image scraping"
 
 ---
 
-## Task 6: GPT content script — multi-project selection
+## Task 5: GPT content script — multi-project selection
 
 **Files:**
 - Modify: `extension/content-gpt.js`
@@ -761,13 +851,13 @@ git commit -m "feat: GPT content script — multi-project selection & navigation
 
 ---
 
-## Task 7: GPT export pipeline & zip builder
+## Task 6: GPT export pipeline & zip builder
 
 **Files:**
 - Create: `extension/lib/gptExport.js`
 
 **Interfaces:**
-- Consumes: `fetchFilesInto` (from `zipBuilder.js`), `gptTurnsToMarkdown`/`gptInstructionsMarkdown`/`gptIndexMarkdown`/`gptConvFolderName` (Task 3), `gptSanitizeFilename` (Task 3), `waitForContentScriptReady` (existing `sidepanel.js` — Task 8 exposes it before this runs; both are panel globals so ordering by `<script>` tags suffices).
+- Consumes: `fetchFilesInto` (from `zipBuilder.js`), `gptTurnsToMarkdown`/`gptInstructionsMarkdown`/`gptIndexMarkdown`/`gptConvFolderName` (Task 2), `gptSanitizeFilename` (Task 2), `waitForContentScriptReady` (existing `sidepanel.js` — Task 7 exposes it before this runs; both are panel globals so ordering by `<script>` tags suffices).
 - Produces:
   - `gptBuildProjectInto(zip, folderPath, project, conversationsWithData)` — writes `index.md`, `instructions.md`, and one folder per conversation (`conversation.md` + `contenu-gpt/`) into `zip` at `folderPath` (or root if falsy). `conversationsWithData` is `[{ title, convId, turns, contentFiles }]`.
   - `gptScrapeProject(tabId, projectUrl, onProgress)` — navigates the tab to the project, scrapes metadata + conversation list, then visits each conversation to scrape its thread; returns `{ project: {name, instructions}, conversations: [{title, convId, turns, contentFiles}] }`.
@@ -836,11 +926,11 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
 }
 ```
 
-Note on `waitForContentScriptReady`'s `expectedPathname`: the existing implementation (Task 8, unchanged) checks the content script's `pathname` *contains/matches* the expected value. For conversations we pass `/c/<convId>` which the real path contains. Confirm in Task 8 the check is a substring/`endsWith`, not strict equality; if it is strict equality, Task 8 relaxes it to `pathname.includes(expected)` for GPT calls (see Task 8 Step 2).
+Note on `waitForContentScriptReady`'s `expectedPathname`: the existing implementation (Task 7, unchanged) checks the content script's `pathname` *contains/matches* the expected value. For conversations we pass `/c/<convId>` which the real path contains. Confirm in Task 7 the check is a substring/`endsWith`, not strict equality; if it is strict equality, Task 7 relaxes it to `pathname.includes(expected)` for GPT calls (see Task 7 Step 2).
 
 - [ ] **Step 2: Manual verification**
 
-Deferred to Task 9 (needs the panel wiring). For now just confirm the file loads without syntax errors:
+Deferred to Task 8 (needs the panel wiring). For now just confirm the file loads without syntax errors:
 Run: `node -e "require('./extension/lib/gptExport.js')" 2>&1 | head -1`
 Expected: either no output, or a `ReferenceError` about `fetchFilesInto`/`chrome` (acceptable — those are browser/panel globals; a *SyntaxError* is NOT acceptable and must be fixed).
 
@@ -853,21 +943,20 @@ git commit -m "feat: add GPT export pipeline & zip builder"
 
 ---
 
-## Task 8: Panel wiring — script loading & host-based routing
+## Task 7: Panel wiring — script loading & host-based routing
 
 **Files:**
 - Modify: `extension/sidepanel.html`
 - Modify: `extension/sidepanel.js:187-235` (relax `waitForContentScriptReady`, add host routing)
 
 **Interfaces:**
-- Consumes: `gptDetectContext`/`isGptHost` (Task 1), `gptScrapeProject`/`gptBuildProjectInto` (Task 7).
+- Consumes: `gptDetectContext`/`isGptHost` (Task 1), `gptScrapeProject`/`gptBuildProjectInto` (Task 6).
 - Produces: `detectGptContext()` in `sidepanel.js`; routing in `detectContext()`.
 
 - [ ] **Step 1: Load the GPT scripts in the panel**
 
 Modify `extension/sidepanel.html` — add before `<script src="sidepanel.js"></script>`:
 ```html
-  <script src="lib/turndown.min.js"></script>
   <script src="lib/gptDetect.js"></script>
   <script src="lib/gptMarkdown.js"></script>
   <script src="lib/gptExport.js"></script>
@@ -937,7 +1026,7 @@ function detectGptContext(url, tab) {
 2. On `chatgpt.com/projects` the panel shows "Select GPT Projects".
 3. On a `/g/g-p-.../project` page the panel shows "Export GPT Project".
 4. On a `/c/<convId>` page or `chatgpt.com/` the panel shows the "Navigate to..." message.
-5. No console errors in the panel. (Buttons don't do anything useful yet — Task 9 wires the handlers `startGptSelection`, `startGptProjectExport`.)
+5. No console errors in the panel. (Buttons don't do anything useful yet — Task 8 wires the handlers `startGptSelection`, `startGptProjectExport`.)
 
 - [ ] **Step 6: Commit**
 
@@ -948,13 +1037,13 @@ git commit -m "feat: panel host-based routing for GPT + script loading"
 
 ---
 
-## Task 9: Panel wiring — single-project export & multi-project batch
+## Task 8: Panel wiring — single-project export & multi-project batch
 
 **Files:**
 - Modify: `extension/sidepanel.js`
 
 **Interfaces:**
-- Consumes: `gptScrapeProject`, `gptBuildProjectInto` (Task 7); `gptSanitizeFilename` (Task 3); content-script messages from Task 6.
+- Consumes: `gptScrapeProject`, `gptBuildProjectInto` (Task 6); `gptSanitizeFilename` (Task 2); content-script messages from Task 5.
 - Produces: `startGptProjectExport(url, tab)`, `startGptSelection()`, `confirmGptSelection()`, `runGptBatch(selected, tab)`, `downloadBlob(blob, filename)` (reuse existing download helper if present).
 
 - [ ] **Step 1: Find the existing download helper**
@@ -1121,7 +1210,7 @@ git commit -m "feat: GPT single-project export & multi-project batch in panel"
 
 ---
 
-## Task 10: Documentation
+## Task 9: Documentation
 
 **Files:**
 - Modify: `CLAUDE.md`
@@ -1130,7 +1219,7 @@ git commit -m "feat: GPT single-project export & multi-project batch in panel"
 
 - [ ] **Step 1: Document the GPT feature**
 
-Add a new section to `CLAUDE.md` after the Architecture section, describing the GPT modules (`gptDetect.js`, `content-gpt.js`, `gptMarkdown.js`, `gptExport.js`, vendored `turndown.min.js`), the DOM-scraping approach (no REST API), the URL patterns, the `contenu-gpt/` output structure, and the fact that GPT and Claude pipelines are isolated. Mirror the writing style/depth of the existing Claude sections. Update the manifest description of `content_scripts` and `host_permissions` to mention chatgpt.com.
+Add a new section to `CLAUDE.md` after the Architecture section, describing the GPT modules (`gptDetect.js`, `content-gpt.js`, `gptMarkdown.js` incl. its self-contained HTML→markdown converter, `gptExport.js`), the DOM-scraping approach (no REST API), the URL patterns, the `contenu-gpt/` output structure, and the fact that GPT and Claude pipelines are isolated. Mirror the writing style/depth of the existing Claude sections. Update the manifest description of `content_scripts` and `host_permissions` to mention chatgpt.com.
 
 - [ ] **Step 2: Manual verification**
 
@@ -1147,6 +1236,6 @@ git commit -m "docs: document GPT export feature"
 
 ## Self-Review Notes
 
-- **Spec coverage:** §2 isolation → Tasks 1–7 (all `gpt*` files) + Global Constraints. §3 detection/URLs → Task 1 + Task 8. §4 Phase 1 instructions → Task 4; Phase 2 list → Task 4; Phase 3 threads → Task 5; HTML→MD → Tasks 2–3. §5 output structure → Tasks 3 (`index`/`instructions`/folder name) + 7 (`contenu-gpt/`, no `artefacts/`). §6 error handling → Task 7 (per-conversation try/catch keeps empty turns) + Task 9 (per-project skip, all-fail no-zip). §7 rate limiting → Task 7 (sequential navigation). Multi-project selection (no href/uuid) → Task 6 + Task 9 click-to-navigate.
-- **Placeholder scan:** No TBD/TODO. Best-effort non-image files (spec §8) intentionally deferred — Task 5 scrapes images only; documented as out-of-scope, not a placeholder.
-- **Type consistency:** `turns: [{role, text?, html?}]` produced by Task 5, consumed by Task 3 (`gptTurnsToMarkdown`) and Task 7. `contentFiles: [{filename, url}]` produced by Task 5, consumed by `fetchFilesInto` (existing signature). Selection `[{index, name}]` produced by Task 6, consumed by Task 9. `gptConvFolderName`/`gptSanitizeFilename` names consistent across Tasks 3, 7, 9.
+- **Spec coverage:** §2 isolation → Tasks 1–6 (all `gpt*` files) + Global Constraints. §3 detection/URLs → Task 1 + Task 7. §4 Phase 1 instructions → Task 3; Phase 2 list → Task 3; Phase 3 threads → Task 4; HTML→MD → Task 2 (self-contained converter). §5 output structure → Task 2 (`index`/`instructions`/folder name) + Task 6 (`contenu-gpt/`, no `artefacts/`). §6 error handling → Task 6 (per-conversation try/catch keeps empty turns) + Task 8 (per-project skip, all-fail no-zip). §7 rate limiting → Task 6 (sequential navigation). Multi-project selection (no href/uuid) → Task 5 + Task 8 click-to-navigate.
+- **Placeholder scan:** No TBD/TODO. Best-effort non-image files (spec §8) intentionally deferred — Task 4 scrapes images only; documented as out-of-scope, not a placeholder.
+- **Type consistency:** `turns: [{role, text?, html?}]` produced by Task 4, consumed by Task 2 (`gptTurnsToMarkdown`) and Task 6. `contentFiles: [{filename, url}]` produced by Task 4, consumed by `fetchFilesInto` (existing signature). Selection `[{index, name}]` produced by Task 5, consumed by Task 8. `gptConvFolderName`/`gptSanitizeFilename` names consistent across Tasks 2, 6, 8.
