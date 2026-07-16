@@ -280,6 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function enterSelectionMode() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (isGptHost(tab.url || '')) return; // GPT uses its own onclick handler
   try {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_SELECTION_MODE' });
     if (!response || !response.armed) {
@@ -482,6 +483,7 @@ async function startRecentsExport(conversationsSelected) {
 
 async function confirmSelection() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (isGptHost(tab.url || '')) return; // GPT uses its own onclick handler
 
   let projects = [];
   try {
@@ -637,6 +639,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 async function runExport() {
+  const [gptTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (isGptHost(gptTab.url || '')) return; // GPT uses its own onclick handler
+
   const exportBtn = document.getElementById('export-btn');
   exportBtn.disabled = true;
 
