@@ -96,6 +96,69 @@ async function gptGetProjectConversations() {
   return { conversations: gptScrapeConversationList() };
 }
 
+function gptFindTurns() {
+  return [...document.querySelectorAll('section[data-turn-id]')];
+}
+
+function gptWaitForThreadToStabilize(timeoutMs, stableChecksRequired, intervalMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let lastCount = -1;
+    let stableChecks = 0;
+    // Scroll the thread's scroll container. ChatGPT threads live in a
+    // scrollable main; scrolling window + the main covers both layouts.
+    const poll = () => {
+      window.scrollTo(0, 0); // load earliest turns first
+      const count = gptFindTurns().length;
+      if (count === lastCount) { stableChecks++; }
+      else { stableChecks = 0; lastCount = count; }
+      if (stableChecks >= stableChecksRequired || Date.now() - start >= timeoutMs) {
+        resolve(count); return;
+      }
+      window.scrollTo(0, document.body.scrollHeight);
+      setTimeout(poll, intervalMs);
+    };
+    poll();
+  });
+}
+
+function gptScrapeTurn(section) {
+  const roleEl = section.querySelector('[data-message-author-role]');
+  if (!roleEl) return null;
+  const role = roleEl.getAttribute('data-message-author-role');
+  if (role === 'user') {
+    const bubble = roleEl.querySelector('.whitespace-pre-wrap');
+    return { role: 'user', text: bubble ? bubble.textContent : roleEl.textContent };
+  }
+  const md = roleEl.querySelector('.markdown');
+  return { role: 'assistant', html: md ? md.innerHTML : roleEl.innerHTML };
+}
+
+function gptScrapeThreadImages() {
+  const files = [];
+  const seen = new Set();
+  const imgs = document.querySelectorAll('section[data-turn-id] img[src*="backend-api"]');
+  imgs.forEach((img) => {
+    const src = img.getAttribute('src');
+    if (!src || seen.has(src)) return;
+    seen.add(src);
+    const alt = img.getAttribute('alt') || `image_${files.length + 1}`;
+    const url = new URL(src, window.location.origin).href;
+    files.push({ filename: alt, url });
+  });
+  return files;
+}
+
+async function gptGetConversation() {
+  await gptWaitForThreadToStabilize(30000, 3, 500);
+  const turns = [];
+  for (const section of gptFindTurns()) {
+    const turn = gptScrapeTurn(section);
+    if (turn) turns.push(turn);
+  }
+  return { turns, contentFiles: gptScrapeThreadImages() };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message && message.type === 'PING') {
     sendResponse({ pong: true, pathname: window.location.pathname });
@@ -107,6 +170,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message && message.type === 'GET_GPT_PROJECT_CONVERSATIONS') {
     gptGetProjectConversations().then(sendResponse);
+    return true;
+  }
+  if (message && message.type === 'GET_GPT_CONVERSATION') {
+    gptGetConversation().then(sendResponse);
     return true;
   }
   return false;
