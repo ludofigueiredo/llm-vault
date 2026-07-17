@@ -21,13 +21,41 @@ function gptGetProjectTitle() {
   return h1 ? h1.textContent.trim() : '';
 }
 
+function gptFindVisibleDetailsButton() {
+  // The details button can be duplicated across responsive layouts; pick the
+  // one that's actually rendered (offsetParent is null for display:none).
+  const buttons = document.querySelectorAll('button[aria-label="Afficher les détails du projet"]');
+  for (const btn of buttons) {
+    if (btn.offsetParent !== null) return btn;
+  }
+  return buttons[0] || null;
+}
+
+function gptFindProjectSettingsMenuItem() {
+  // The details button opens an intermediate menu; we want its
+  // "Paramètres du projet" item, which opens the settings dialog.
+  const items = document.querySelectorAll('[role="menuitem"]');
+  for (const item of items) {
+    if (item.textContent.trim() === 'Paramètres du projet') return item;
+  }
+  return null;
+}
+
 async function gptGetProjectMetadata() {
   const fallback = { name: gptGetProjectTitle(), instructions: '' };
 
-  const detailsBtn = document.querySelector('button[aria-label="Afficher les détails du projet"]');
+  const detailsBtn = gptFindVisibleDetailsButton();
   if (!detailsBtn) return fallback;
   detailsBtn.click();
 
+  // Step 1: the details button opens a menu — click its "Paramètres du
+  // projet" item to reach the settings dialog (the dialog does not open
+  // directly from the details button).
+  const menuItem = await gptWaitForCondition(gptFindProjectSettingsMenuItem, 5000, 100);
+  if (!menuItem) return fallback;
+  menuItem.click();
+
+  // Step 2: wait for the settings dialog with the name/instructions fields.
   const dialog = await gptWaitForCondition(
     () => document.querySelector('div[role="dialog"] input#project-name'),
     5000, 100
