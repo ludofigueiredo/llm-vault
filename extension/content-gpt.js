@@ -1,5 +1,7 @@
-// GPT content script — pure DOM scraping (no REST API). Injected on
-// chatgpt.com. Fully independent of the Claude content.js.
+// GPT content script — injected on chatgpt.com. Fully independent of the
+// Claude content.js. Uses DOM scraping for project-scoped data (instructions,
+// the project's conversation list, multi-project selection) and ChatGPT's
+// internal /backend-api for conversation content and file downloads.
 
 function gptWaitForCondition(checkFn, timeoutMs, intervalMs) {
   return new Promise((resolve) => {

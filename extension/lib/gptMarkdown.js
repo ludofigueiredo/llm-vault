@@ -12,7 +12,6 @@ function gptConvFolderName(conv) {
   return `${title}_${short}`;
 }
 
-
 function gptTurnsToMarkdown(project, turns) {
   const lines = [`# ${project.name || 'Conversation'}`, ''];
   for (const turn of turns) {
