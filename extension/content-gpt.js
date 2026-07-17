@@ -14,6 +14,101 @@ function gptWaitForCondition(checkFn, timeoutMs, intervalMs) {
   });
 }
 
+function gptStripCitations(str) {
+  return str.replace(/【[^】]*】/g, '');
+}
+
+function gptExtractFileReferences(convo) {
+  const refs = [];
+  const seen = new Set();
+  const mapping = convo.mapping || {};
+  for (const node of Object.values(mapping)) {
+    const msg = node && node.message;
+    if (!msg) continue;
+    if (msg.content && msg.content.parts) {
+      for (const part of msg.content.parts) {
+        if (part && part.content_type === 'image_asset_pointer' && part.asset_pointer) {
+          const match = part.asset_pointer.match(/^(?:file-service|sediment):\/\/(.+)$/);
+          if (match && !seen.has(match[1])) {
+            seen.add(match[1]);
+            refs.push({ fileId: match[1], filename: 'image.png', type: 'image' });
+          }
+        }
+      }
+    }
+    if (msg.metadata && msg.metadata.attachments) {
+      for (const att of msg.metadata.attachments) {
+        if (att.id && !seen.has(att.id)) {
+          seen.add(att.id);
+          refs.push({ fileId: att.id, filename: att.name || 'attachment', type: 'attachment' });
+        }
+      }
+    }
+    if (msg.metadata && msg.metadata.citations) {
+      for (const cit of msg.metadata.citations) {
+        const fileId = (cit.metadata && cit.metadata.file_id) || cit.file_id;
+        const title = (cit.metadata && cit.metadata.title) || cit.title || 'citation';
+        if (fileId && !seen.has(fileId)) {
+          seen.add(fileId);
+          refs.push({ fileId, filename: title, type: 'citation' });
+        }
+      }
+    }
+  }
+  return refs;
+}
+
+function gptMappingToTurns(convo, fileMap) {
+  fileMap = fileMap || {};
+  const turns = [];
+  const mapping = convo.mapping || {};
+  const rootId = Object.keys(mapping).find((k) => mapping[k].parent == null);
+  if (!rootId) return turns;
+
+  const queue = [rootId];
+  while (queue.length) {
+    const nid = queue.shift();
+    const node = mapping[nid] || {};
+    const msg = node.message;
+    if (msg && msg.content && msg.content.parts) {
+      const role = (msg.author && msg.author.role) || 'unknown';
+      const contentType = (msg.content && msg.content.content_type) || 'text';
+      const skip =
+        role === 'system' ||
+        role === 'tool' ||
+        (role === 'assistant' && contentType !== 'text');
+      if (!skip) {
+        const textParts = [];
+        for (const part of msg.content.parts) {
+          if (typeof part === 'string') {
+            textParts.push(part);
+          } else if (part && part.content_type === 'image_asset_pointer' && part.asset_pointer) {
+            const match = part.asset_pointer.match(/^(?:file-service|sediment):\/\/(.+)$/);
+            if (match && fileMap[match[1]]) {
+              textParts.push(`![image](${fileMap[match[1]]})`);
+            } else {
+              textParts.push('[image]');
+            }
+          } else {
+            textParts.push(JSON.stringify(part));
+          }
+        }
+        if (msg.metadata && msg.metadata.attachments) {
+          for (const att of msg.metadata.attachments) {
+            if (att.id && fileMap[att.id]) {
+              textParts.push(`\n📎 [${att.name || 'attachment'}](${fileMap[att.id]})`);
+            }
+          }
+        }
+        const text = gptStripCitations(textParts.join('\n')).trim();
+        if (text) turns.push({ role: role === 'user' ? 'user' : 'assistant', markdown: text });
+      }
+    }
+    queue.push(...((node.children) || []));
+  }
+  return turns;
+}
+
 function gptGetProjectTitle() {
   const h1Btn = document.querySelector('button[name="project-title"]');
   if (h1Btn) return h1Btn.textContent.trim();
@@ -278,39 +373,46 @@ function gptNavigateProject(index) {
   return { navigated: true, name };
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message && message.type === 'PING') {
-    sendResponse({ pong: true, pathname: window.location.pathname });
+if (typeof chrome !== 'undefined' && chrome.runtime) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message && message.type === 'PING') {
+      sendResponse({ pong: true, pathname: window.location.pathname });
+      return false;
+    }
+    if (message && message.type === 'GET_GPT_PROJECT_METADATA') {
+      gptGetProjectMetadata().then(sendResponse);
+      return true;
+    }
+    if (message && message.type === 'GET_GPT_PROJECT_CONVERSATIONS') {
+      gptGetProjectConversations().then(sendResponse);
+      return true;
+    }
+    if (message && message.type === 'GET_GPT_CONVERSATION') {
+      gptGetConversation().then(sendResponse);
+      return true;
+    }
+    if (message && message.type === 'START_GPT_SELECTION_MODE') {
+      sendResponse({ armed: gptStartSelectionMode() });
+      return false;
+    }
+    if (message && message.type === 'GET_GPT_SELECTED_PROJECTS') {
+      sendResponse(gptGetSelectedProjects());
+      return false;
+    }
+    if (message && message.type === 'STOP_GPT_SELECTION_MODE') {
+      gptStopSelectionMode();
+      sendResponse({ stopped: true });
+      return false;
+    }
+    if (message && message.type === 'NAVIGATE_GPT_PROJECT') {
+      sendResponse(gptNavigateProject(message.index));
+      return false;
+    }
     return false;
-  }
-  if (message && message.type === 'GET_GPT_PROJECT_METADATA') {
-    gptGetProjectMetadata().then(sendResponse);
-    return true;
-  }
-  if (message && message.type === 'GET_GPT_PROJECT_CONVERSATIONS') {
-    gptGetProjectConversations().then(sendResponse);
-    return true;
-  }
-  if (message && message.type === 'GET_GPT_CONVERSATION') {
-    gptGetConversation().then(sendResponse);
-    return true;
-  }
-  if (message && message.type === 'START_GPT_SELECTION_MODE') {
-    sendResponse({ armed: gptStartSelectionMode() });
-    return false;
-  }
-  if (message && message.type === 'GET_GPT_SELECTED_PROJECTS') {
-    sendResponse(gptGetSelectedProjects());
-    return false;
-  }
-  if (message && message.type === 'STOP_GPT_SELECTION_MODE') {
-    gptStopSelectionMode();
-    sendResponse({ stopped: true });
-    return false;
-  }
-  if (message && message.type === 'NAVIGATE_GPT_PROJECT') {
-    sendResponse(gptNavigateProject(message.index));
-    return false;
-  }
-  return false;
-});
+  });
+}
+
+// Node export for pure-function tests only (no-op in the browser).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { gptStripCitations, gptExtractFileReferences, gptMappingToTurns };
+}
