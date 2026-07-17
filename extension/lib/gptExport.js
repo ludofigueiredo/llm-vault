@@ -1,8 +1,25 @@
+function gptBase64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 async function gptBuildConversationFolder(target, conv) {
   const folder = target.folder(gptConvFolderName(conv));
   folder.file('conversation.md', gptTurnsToMarkdown({ name: conv.title }, conv.turns || []));
   const contenu = folder.folder('contenu-gpt');
-  await fetchFilesInto(contenu, conv.contentFiles || []);
+  const files = conv.files || [];
+  let any = false;
+  for (const f of files) {
+    try {
+      contenu.file(f.filename, gptBase64ToBytes(f.bytesBase64));
+      any = true;
+    } catch (e) {
+      // Skip a corrupt entry; keep going.
+    }
+  }
+  if (!any) contenu.file('.gitkeep', '');
 }
 
 async function gptBuildProjectInto(zip, folderPath, project, conversationsWithData) {
@@ -42,15 +59,15 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
     try {
       await chrome.tabs.update(tabId, { url: convUrl });
       const convReady = await waitForContentScriptReady(tabId, 15000, `/c/${conv.convId}`);
-      if (!convReady) { result.conversations.push({ ...conv, turns: [], contentFiles: [] }); continue; }
-      const data = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_CONVERSATION' });
+      if (!convReady) { result.conversations.push({ ...conv, turns: [], files: [] }); continue; }
+      const data = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId });
       result.conversations.push({
         ...conv,
         turns: (data && data.turns) || [],
-        contentFiles: (data && data.contentFiles) || [],
+        files: (data && data.files) || [],
       });
     } catch (e) {
-      result.conversations.push({ ...conv, turns: [], contentFiles: [] });
+      result.conversations.push({ ...conv, turns: [], files: [] });
     }
   }
   return result;
