@@ -220,70 +220,103 @@ async function gptGetProjectConversations() {
   return { conversations: gptScrapeConversationList() };
 }
 
-function gptFindTurns() {
-  return [...document.querySelectorAll('section[data-turn-id]')];
+let gptCachedToken = null;
+let gptDeviceId = null;
+
+async function gptGetSessionToken() {
+  if (gptCachedToken) return gptCachedToken;
+  const session = await fetch('/api/auth/session', { credentials: 'include' }).then((r) => r.json());
+  if (!session || !session.accessToken) throw new Error('no ChatGPT session token');
+  gptCachedToken = session.accessToken;
+  return gptCachedToken;
 }
 
-function gptWaitForThreadToStabilize(timeoutMs, stableChecksRequired, intervalMs) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    let lastCount = -1;
-    let stableChecks = 0;
-    // De-virtualize the thread by scrolling the document to the top (to
-    // load the earliest turns) then to the bottom, repeatedly, until the
-    // turn count stops growing. ChatGPT's thread scrolls via the document
-    // itself, so window.scrollTo drives it; if a future layout moves the
-    // thread into an inner scroll container this will need revisiting.
-    const poll = () => {
-      window.scrollTo(0, 0); // load earliest turns first
-      const count = gptFindTurns().length;
-      if (count === lastCount) { stableChecks++; }
-      else { stableChecks = 0; lastCount = count; }
-      if (stableChecks >= stableChecksRequired || Date.now() - start >= timeoutMs) {
-        resolve(count); return;
-      }
-      window.scrollTo(0, document.body.scrollHeight);
-      setTimeout(poll, intervalMs);
-    };
-    poll();
+function gptApiHeaders(token) {
+  if (!gptDeviceId) gptDeviceId = crypto.randomUUID();
+  return {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+    'Oai-Device-Id': gptDeviceId,
+    'Oai-Language': 'en-US',
+  };
+}
+
+async function gptApiGet(path, token) {
+  const resp = await fetch(`/backend-api/${path}`, {
+    headers: gptApiHeaders(token),
+    credentials: 'include',
   });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
 }
 
-function gptScrapeTurn(section) {
-  const roleEl = section.querySelector('[data-message-author-role]');
-  if (!roleEl) return null;
-  const role = roleEl.getAttribute('data-message-author-role');
-  if (role === 'user') {
-    const bubble = roleEl.querySelector('.whitespace-pre-wrap');
-    return { role: 'user', text: bubble ? bubble.textContent : roleEl.textContent };
+const GPT_MIME_TO_EXT = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
+  'image/webp': '.webp', 'image/svg+xml': '.svg', 'application/pdf': '.pdf',
+  'text/plain': '.txt', 'text/html': '.html', 'text/csv': '.csv',
+  'application/json': '.json', 'application/zip': '.zip',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+};
+
+function gptDeduplicateFilename(name, usedNames) {
+  if (!usedNames.has(name)) { usedNames.add(name); return name; }
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let i = 1;
+  while (usedNames.has(`${base}_${i}${ext}`)) i++;
+  const deduped = `${base}_${i}${ext}`;
+  usedNames.add(deduped);
+  return deduped;
+}
+
+function gptBytesToBase64(bytes) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
   }
-  const md = roleEl.querySelector('.markdown');
-  return { role: 'assistant', html: md ? md.innerHTML : roleEl.innerHTML };
+  return btoa(binary);
 }
 
-function gptScrapeThreadImages() {
+async function gptDownloadFile(fileId, fallbackName, token, usedNames) {
+  const meta = await gptApiGet(`files/download/${fileId}`, token);
+  if (!meta || !meta.download_url) throw new Error('no download_url');
+  const resp = await fetch(meta.download_url, { credentials: 'include' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const bytes = new Uint8Array(await resp.arrayBuffer());
+  const contentType = (resp.headers.get('content-type') || '').split(';')[0].trim();
+  let filename = meta.file_name || fallbackName || fileId;
+  if (!filename.includes('.') && GPT_MIME_TO_EXT[contentType]) {
+    filename += GPT_MIME_TO_EXT[contentType];
+  }
+  const finalName = gptDeduplicateFilename(filename, usedNames);
+  return { filename: finalName, bytesBase64: gptBytesToBase64(bytes) };
+}
+
+async function gptGetConversationViaApi(convId) {
+  const token = await gptGetSessionToken();
+  const convo = await gptApiGet(`conversation/${convId}`, token);
+
+  const refs = gptExtractFileReferences(convo);
+  const usedNames = new Set();
   const files = [];
-  const seen = new Set();
-  const imgs = document.querySelectorAll('section[data-turn-id] img[src*="backend-api"]');
-  imgs.forEach((img) => {
-    const src = img.getAttribute('src');
-    if (!src || seen.has(src)) return;
-    seen.add(src);
-    const alt = img.getAttribute('alt') || `image_${files.length + 1}`;
-    const url = new URL(src, window.location.origin).href;
-    files.push({ filename: alt, url });
-  });
-  return files;
-}
-
-async function gptGetConversation() {
-  await gptWaitForThreadToStabilize(30000, 3, 500);
-  const turns = [];
-  for (const section of gptFindTurns()) {
-    const turn = gptScrapeTurn(section);
-    if (turn) turns.push(turn);
+  const fileMap = {};
+  for (const ref of refs) {
+    try {
+      const dl = await gptDownloadFile(ref.fileId, ref.filename, token, usedNames);
+      files.push(dl);
+      fileMap[ref.fileId] = `contenu-gpt/${dl.filename}`;
+      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      // Skip this file; keep going.
+    }
   }
-  return { turns, contentFiles: gptScrapeThreadImages() };
+
+  const turns = gptMappingToTurns(convo, fileMap);
+  return { title: convo.title || '', createTime: convo.create_time || null, turns, files };
 }
 
 const GPT_SELECTED_CLASS = 'llmvault-gpt-selected';
@@ -387,8 +420,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
       gptGetProjectConversations().then(sendResponse);
       return true;
     }
-    if (message && message.type === 'GET_GPT_CONVERSATION') {
-      gptGetConversation().then(sendResponse);
+    if (message && message.type === 'GET_GPT_CONVERSATION_VIA_API') {
+      gptGetConversationViaApi(message.convId).then(sendResponse).catch(() => sendResponse({ error: true }));
       return true;
     }
     if (message && message.type === 'START_GPT_SELECTION_MODE') {
