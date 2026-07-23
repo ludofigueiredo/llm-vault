@@ -24,6 +24,24 @@ function isRecentsUrl(url) {
   }
 }
 
+function isGptProjectsListingUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'chatgpt.com' && parsed.pathname === '/projects';
+  } catch (e) {
+    return false;
+  }
+}
+
+function isGptConversationsListingUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'chatgpt.com' && parsed.pathname === '/';
+  } catch (e) {
+    return false;
+  }
+}
+
 // Claude Teams ("cowork") accounts serve project pages under
 // /cowork/project/{uuid} and /cowork/projects instead of /project/{uuid}
 // and /projects — same UUIDs, same (assumed) page content, different path
@@ -111,6 +129,7 @@ function detectGptContext(url, tab) {
   if (selectionMode || batchInProgress) return;
 
   setHomeActiveButton(true);
+  updateProviderNav(url, true);
 
   const exportBtn = document.getElementById('export-btn');
   const selectProjectsBtn = document.getElementById('select-projects-btn');
@@ -160,6 +179,18 @@ async function detectContext() {
   }
 
   setHomeActiveButton(false);
+
+  let onClaudeHost = false;
+  try {
+    onClaudeHost = new URL(url).hostname === 'claude.ai';
+  } catch (e) {
+    onClaudeHost = false;
+  }
+  if (onClaudeHost) {
+    updateProviderNav(url, false);
+  } else {
+    document.getElementById('provider-nav').style.display = 'none';
+  }
 
   const contextMessage = document.getElementById('context-message');
   const exportBtn = document.getElementById('export-btn');
@@ -244,6 +275,24 @@ async function gotoSite(url) {
   chrome.tabs.update(tab.id, { url });
 }
 
+function claudeProjectsUrl() { return 'https://claude.ai/cowork/projects'; }
+function claudeConversationsUrl() { return 'https://claude.ai/chats'; }
+function gptProjectsUrl() { return 'https://chatgpt.com/projects'; }
+function gptConversationsUrl() { return 'https://chatgpt.com/'; }
+
+function updateProviderNav(url, isGpt) {
+  const nav = document.getElementById('provider-nav');
+  const projectBtn = document.getElementById('goto-project-btn');
+  const conversationBtn = document.getElementById('goto-conversation-btn');
+  nav.style.display = 'block';
+
+  const onProjectsListing = isGpt ? isGptProjectsListingUrl(url) : isProjectsListingUrl(url);
+  const onConversationsListing = isGpt ? isGptConversationsListingUrl(url) : isRecentsUrl(url);
+
+  projectBtn.classList.toggle('is-active-site', onProjectsListing);
+  conversationBtn.classList.toggle('is-active-site', onConversationsListing);
+}
+
 function waitForContentScriptReady(tabId, timeoutMs, expectedPathname) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -279,6 +328,16 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('goto-gpt-btn').addEventListener('click', () => {
     gotoSite('https://chatgpt.com');
+  });
+  document.getElementById('goto-project-btn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const target = isGptHost(tab.url || '') ? gptProjectsUrl() : claudeProjectsUrl();
+    gotoSite(target);
+  });
+  document.getElementById('goto-conversation-btn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const target = isGptHost(tab.url || '') ? gptConversationsUrl() : claudeConversationsUrl();
+    gotoSite(target);
   });
   document.getElementById('export-btn').addEventListener('click', () => {
     runExport();

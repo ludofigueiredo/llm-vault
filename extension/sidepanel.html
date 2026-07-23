@@ -93,6 +93,10 @@
       margin: 20px 0;
     }
 
+    .provider-nav {
+      padding: 0 4px 18px;
+    }
+
     .panel {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -182,6 +186,12 @@
     </div>
   </div>
   <hr class="home-separator">
+  <div class="provider-nav" id="provider-nav" style="display:none;">
+    <div class="button-row">
+      <button id="goto-project-btn" type="button">Project</button>
+      <button id="goto-conversation-btn" type="button">Conversation</button>
+    </div>
+  </div>
   <div class="panel">
     <div id="context-message"></div>
     <button id="export-btn" style="display:none;"></button>
