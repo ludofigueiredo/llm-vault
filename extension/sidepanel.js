@@ -230,6 +230,11 @@ function setStatus(message, kind) {
   status.className = kind || '';
 }
 
+async function gotoSite(url) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.tabs.update(tab.id, { url });
+}
+
 function waitForContentScriptReady(tabId, timeoutMs, expectedPathname) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -260,6 +265,12 @@ function waitForContentScriptReady(tabId, timeoutMs, expectedPathname) {
 
 document.addEventListener('DOMContentLoaded', () => {
   detectContext();
+  document.getElementById('goto-claude-btn').addEventListener('click', () => {
+    gotoSite('https://claude.ai');
+  });
+  document.getElementById('goto-gpt-btn').addEventListener('click', () => {
+    gotoSite('https://chatgpt.com');
+  });
   document.getElementById('export-btn').addEventListener('click', () => {
     runExport();
   });
