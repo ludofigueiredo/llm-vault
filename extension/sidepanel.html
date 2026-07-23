@@ -48,21 +48,31 @@
       color: var(--text-primary);
     }
 
-    .intro {
+    .home {
       padding: 4px 4px 18px;
     }
 
-    .intro-title {
+    .home-title {
       font-weight: 700;
       font-size: 15px;
       margin: 0 0 6px;
     }
 
-    .intro-body {
+    .home-body {
       font-size: 12.5px;
       line-height: 1.55;
       color: var(--text-secondary);
-      margin: 0;
+      margin: 0 0 14px;
+    }
+
+    .home-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .home-actions button {
+      flex: 1;
+      margin-top: 0;
     }
 
     .panel {
@@ -141,9 +151,17 @@
   </style>
 </head>
 <body>
-  <div class="intro">
-    <p class="intro-title">LLM Vault</p>
-    <p class="intro-body">Export your Claude projects and conversations as organized Markdown files. Open a project or conversation on claude.ai, then use the button below — or select multiple projects/conversations from a listing page to export them together.</p>
+  <div class="home">
+    <p class="home-title">LLM Vault</p>
+    <p class="home-body">
+      Turn your Claude and ChatGPT conversations into organized, portable Markdown — projects,
+      individual chats, attachments and generated files all included in a single zip. Keep a
+      permanent, searchable archive of your work that lives outside any one provider's dashboard.
+    </p>
+    <div class="home-actions">
+      <button id="goto-claude-btn" type="button">Open Claude</button>
+      <button id="goto-gpt-btn" type="button">Open ChatGPT</button>
+    </div>
   </div>
   <div class="panel">
     <div id="context-message"></div>
