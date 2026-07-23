@@ -143,7 +143,24 @@ function ensureSelectionStyle() {
   if (document.getElementById('claude-exporter-selection-style')) return;
   const style = document.createElement('style');
   style.id = 'claude-exporter-selection-style';
-  style.textContent = `.${SELECTED_BORDER_CLASS} { outline: 3px solid red !important; outline-offset: -3px; }`;
+  style.textContent = `
+    /* Projects list: the class lands on the <li>, but the painted card is
+       its child <a data-primary="true"> (own bg-surface-1 background), so
+       the highlight must target that child directly to render on top of it. */
+    .${SELECTED_BORDER_CLASS} a[data-primary="true"] {
+      outline: 3px solid #B8874B !important;
+      outline-offset: -3px !important;
+      background-color: rgba(184, 135, 75, 0.16) !important;
+      box-shadow: 0 4px 16px rgba(184, 135, 75, 0.4) !important;
+    }
+    /* Recents table: the class lands directly on the <tr>, which is itself
+       the painted/hoverable element. */
+    tr.${SELECTED_BORDER_CLASS} {
+      outline: 3px solid #B8874B !important;
+      outline-offset: -3px !important;
+      background-color: rgba(184, 135, 75, 0.16) !important;
+    }
+  `;
   document.head.appendChild(style);
 }
 
