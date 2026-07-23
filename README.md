@@ -1,11 +1,19 @@
 # LLM Vault
 
-A Chrome extension that exports Claude conversations to structured Markdown.
+A Chrome extension that exports Claude and ChatGPT conversations to structured Markdown.
+
+**Claude:**
 
 - **Project export**: exports every conversation in a Claude Project as a `.zip` containing an `index.md` summary plus one folder per conversation.
 - **Single conversation export**: exports one conversation as a `.zip` with the same per-conversation folder structure.
 - **Multi-project batch export**: from the `claude.ai/projects` listing page, visually select several projects (red border on click) and export all of them into one combined `.zip`, one subfolder per project.
 - **Multi-conversation recents export**: from the `claude.ai/recents` page, visually select individual recent conversations (red border on click) or use "Select All" to bulk-select with auto-scroll, then export them into one `.zip` containing a combined index and one folder per conversation.
+
+**ChatGPT:**
+
+- **Project export**: exports every conversation in a ChatGPT Project as a `.zip` containing an `index.md` summary, the project's instructions (if any), and one folder per conversation with its referenced files.
+- **Multi-project batch export**: from the `chatgpt.com/projects` listing page, visually select several projects and export them together into one combined `.zip`.
+- Standalone (non-project) ChatGPT conversations are not yet exportable.
 
 ## Installation (developer mode)
 
@@ -19,18 +27,19 @@ This extension is not published to the Chrome Web Store. Install it manually (re
 
 ## Usage
 
-1. Click the extension icon in your Chrome toolbar — a side panel opens and stays docked to the side of the browser window (it stays open across tab switches until you close it). The top of the panel always shows a home section with **Open Claude** / **Open ChatGPT** buttons that navigate your active tab to the respective site if you're not there already.
+1. Click the extension icon in your Chrome toolbar — a side panel opens and stays docked to the side of the browser window (it stays open across tab switches until you close it). The top of the panel always shows a home section with **Open Claude** / **Open ChatGPT** buttons that navigate your active tab to the respective site if you're not there already, highlighting whichever site you're currently on.
 2. Log into [claude.ai](https://claude.ai) (or [chatgpt.com](https://chatgpt.com)).
-3. Navigate to a Claude Project page (`claude.ai/project/[uuid]`) or a conversation page (`claude.ai/chat/[uuid]`); the panel updates to show the detected context.
-4. Click **Export Project** or **Export Conversation** (the button label depends on which page you're on).
-5. Wait for the export to complete — a `.zip` file will download automatically.
+3. Below a separator, the panel shows **Project** / **Conversation** shortcuts whenever you're on either site — they jump straight to that provider's Projects listing or conversation-history page, highlighting whichever one you're already on.
+4. Navigate to a Claude Project page (`claude.ai/project/[uuid]`) or a conversation page (`claude.ai/chat/[uuid]`) — or, on ChatGPT, a Project page; the panel updates to show the detected context.
+5. Click **Export Project** or **Export Conversation** (the button label depends on which page you're on).
+6. Wait for the export to complete — a `.zip` file will download automatically.
 
-### Batch-exporting multiple projects
+### Batch-exporting multiple Claude projects
 
 1. Navigate to `claude.ai/projects` (the projects listing page). The panel shows a **Select Projects** button.
 2. Click it, then click each project card you want to include — a red border appears around selected cards. Click a selected card again to deselect it.
-3. The panel's button updates live to **Confirm Selection (N)**. Click it once you've picked the projects you want.
-4. The extension takes over: it navigates the tab to each selected project in turn, scrapes it (same pipeline as a single-project export), and moves to the next. Watch the tab and the panel's status message for progress.
+3. The panel's button updates live to **Confirm Selection (N)**, with a **Cancel** button beneath it to exit selection mode without exporting anything.
+4. Click **Confirm Selection** once you've picked the projects you want. The extension takes over: it navigates the tab to each selected project in turn, scrapes it (same pipeline as a single-project export), and moves to the next. Watch the tab and the panel's status message for progress.
 5. Once every selected project has been processed, one combined `.zip` downloads automatically, containing a subfolder per project.
 
 Keep the side panel open for the whole batch — closing it mid-batch loses progress (the batch does not resume). If a project fails to load or scrape, it's skipped and the batch continues with the rest; the final status message reports which ones failed and why.
@@ -39,11 +48,27 @@ Keep the side panel open for the whole batch — closing it mid-batch loses prog
 
 1. Navigate to `claude.ai/recents` (the recents page showing your conversation history). The panel shows a **Select Conversations** button.
 2. Click it, then click each conversation row you want to include — a red border appears around selected rows. Click a selected row again to deselect it. Alternatively, click **Select All** to auto-scroll through your entire conversation history and select every conversation found (this may take a minute or two for large histories, as the page lazy-loads).
-3. The panel's button updates live to **Confirm Selection (N)**. Click it once you've picked the conversations you want.
-4. The extension takes over: it fetches all selected conversations (same pipeline as a project export), briefly visits each conversation's page to capture its image attachments, then builds and downloads a combined `.zip` automatically.
+3. The panel's button updates live to **Confirm Selection (N)**, with a **Cancel** button beneath it to exit selection mode without exporting anything.
+4. Click **Confirm Selection** once you've picked the conversations you want. The extension takes over: it fetches all selected conversations (same pipeline as a project export), briefly visits each conversation's page to capture its image attachments, then builds and downloads a combined `.zip` automatically.
 5. Once every selected conversation has been processed, one combined `.zip` downloads automatically, containing a unified index and one folder per conversation.
 
 Keep the side panel open for the whole export — closing it mid-export loses progress. If a conversation fails to fetch, it's skipped and the export continues with the rest; the final status message reports how many succeeded.
+
+### Exporting a ChatGPT Project
+
+1. Navigate to `chatgpt.com/projects` (the projects listing page) and open the Project you want to export. The panel shows an **Export GPT Project** button.
+2. Click it. The extension fetches the project's instructions and conversation list from the page, then calls ChatGPT's own API to pull each conversation's full content and referenced files.
+3. Wait for the export to complete — a `.zip` file will download automatically.
+
+### Batch-exporting multiple ChatGPT projects
+
+1. Navigate to `chatgpt.com/projects`. The panel shows a **Select GPT Projects** button.
+2. Click it, then click each project row you want to include — a red border appears around selected rows. Click a selected row again to deselect it.
+3. The panel's button updates live to **Confirm Selection (N)**, with a **Cancel** button beneath it to exit selection mode without exporting anything.
+4. Click **Confirm Selection** once you've picked the projects you want. The extension takes over: it navigates back to the projects list and into each selected project in turn, scrapes it, and moves to the next.
+5. Once every selected project has been processed, one combined `.zip` downloads automatically, containing a subfolder per project.
+
+Keep the side panel open for the whole batch — closing it mid-batch loses progress. If a project fails to load, scrape, or its name no longer matches what was selected (the list can reorder between selecting and exporting), it's skipped and the batch continues with the rest; the final status message reports which ones failed and why.
 
 ## Output structure
 
@@ -109,9 +134,33 @@ For **single conversation exports**, `artefacts/` and `contenu/` are populated a
 
 For **project exports** (including multi-project batch export), `artefacts/` and `contenu/` are populated for every conversation the same way as a single-conversation export — this does mean project export now takes noticeably longer, since the extension briefly visits each conversation's page to capture its image attachments. `fichiers/` contains the project's image knowledge files (non-image knowledge files aren't captured yet). `memory.md`/`instructions.md` are only added when the project page has that section populated — they're scraped from the currently open project tab's page content, so the project's tab must be open in the browser when you export.
 
+**ChatGPT project export** (`gpt_project_<name>.zip`):
+```
+index.md
+instructions.md         (if the project has instructions configured)
+conversation-title_<uuid8>/
+  conversation.md
+  contenu-gpt/
+```
+
+**ChatGPT multi-project batch export** (`gpt_projects_batch_<count>.zip`):
+```
+project-name-a/
+  index.md
+  instructions.md       (if present)
+  conversation-title_<uuid8>/
+    conversation.md
+    contenu-gpt/
+project-name-b/
+  index.md
+  ...
+```
+
+For ChatGPT exports, `contenu-gpt/` contains every file referenced in the conversation — images, attachments, and citation-linked files alike — downloaded via ChatGPT's own API and deduplicated by filename. If a conversation has no referenced files, the folder stays empty. There is no `artefacts/`, `memory.md`, or `fichiers/` in ChatGPT output — those are Claude-specific concepts (Claude-generated sandbox artifacts and project knowledge files) with no ChatGPT equivalent.
+
 ## How it works
 
-The extension reads your `claude.ai` session cookie (`lastActiveOrg`) to identify your organization, then calls the same internal APIs the claude.ai web app uses to list and fetch conversations. All processing happens locally in your browser — no data is sent anywhere except to claude.ai itself.
+The extension reads your `claude.ai` session cookie (`lastActiveOrg`) to identify your organization, then calls the same internal APIs the claude.ai web app uses to list and fetch conversations. For ChatGPT, it reads your existing chatgpt.com session (via ChatGPT's own `/api/auth/session` endpoint) to call the same internal `/backend-api` the ChatGPT web app itself uses. All processing happens locally in your browser — no data is sent anywhere except to claude.ai or chatgpt.com themselves.
 
 ## Related Tools
 
