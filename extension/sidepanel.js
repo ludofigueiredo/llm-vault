@@ -382,7 +382,7 @@ async function enterSelectionMode() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (isGptHost(tab.url || '')) return; // GPT uses its own onclick handler
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_SELECTION_MODE' });
+    const response = await sendMessageWithRecovery(tab.id, { type: 'START_SELECTION_MODE' }, 'content.js');
     if (!response || !response.armed) {
       setStatus('Could not start selection mode — the project list was not found on this page.', 'error');
       return;
@@ -447,7 +447,7 @@ async function cancelSelection() {
 async function enterRecentsSelectionMode() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_RECENTS_SELECTION_MODE' });
+    const response = await sendMessageWithRecovery(tab.id, { type: 'START_RECENTS_SELECTION_MODE' }, 'content.js');
     if (!response || !response.armed) {
       setStatus('Could not start selection mode — the conversations list was not found on this page.', 'error');
       return;
@@ -818,13 +818,14 @@ async function runExport() {
       let projectMetadata = { memory: null, instructions: null };
       let contentScriptUnreachable = false;
       try {
-        const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_METADATA' });
+        const response = await sendMessageWithRecovery(tabId, { type: 'GET_PROJECT_METADATA' }, 'content.js');
         if (response) {
           projectMetadata = response;
         }
       } catch (e) {
         // Content script not present/responsive (e.g. the page was open before the
-        // extension was installed/reloaded) — proceed without memory/instructions.
+        // extension was installed/reloaded, and recovery via sendMessageWithRecovery
+        // also failed) — proceed without memory/instructions.
         contentScriptUnreachable = true;
       }
 
@@ -892,7 +893,7 @@ async function runExport() {
       try {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         setStatus('Capturing artifacts and content files...', '');
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CONVERSATION_ARTIFACTS' });
+        const response = await sendMessageWithRecovery(tab.id, { type: 'GET_CONVERSATION_ARTIFACTS' }, 'content.js');
         if (response) {
           // Image content files still come from the DOM (their /preview URL
           // isn't derivable from a /mnt/user-data path), merged alongside
@@ -901,7 +902,8 @@ async function runExport() {
         }
       } catch (e) {
         // Content script not present/responsive (e.g. the page was open before the
-        // extension was installed/reloaded) — proceed without image content files.
+        // extension was installed/reloaded, and recovery via sendMessageWithRecovery
+        // also failed) — proceed without image content files.
         contentScriptUnreachable = true;
       }
 
@@ -974,7 +976,13 @@ async function startGptProjectExport(url, tab) {
 
 async function startGptSelection() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const resp = await chrome.tabs.sendMessage(tab.id, { type: 'START_GPT_SELECTION_MODE' });
+  let resp;
+  try {
+    resp = await sendMessageWithRecovery(tab.id, { type: 'START_GPT_SELECTION_MODE' }, 'content-gpt.js');
+  } catch (e) {
+    setStatus('Could not start selection mode — try refreshing the page and reopening the panel.', 'error');
+    return;
+  }
   if (!resp || !resp.armed) return;
   selectionMode = true;
   const selectBtn = document.getElementById('select-projects-btn');
