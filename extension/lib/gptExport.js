@@ -41,7 +41,7 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
   if (!ready) throw new Error('project page not ready');
 
   // 2. Instructions + conversation list.
-  const project = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_PROJECT_METADATA' });
+  const project = await sendMessageWithRecovery(tabId, { type: 'GET_GPT_PROJECT_METADATA' }, 'content-gpt.js');
   const listResp = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_PROJECT_CONVERSATIONS' });
   const conversations = (listResp && listResp.conversations) || [];
   if (conversations.length === 0) throw new Error('no conversations');
