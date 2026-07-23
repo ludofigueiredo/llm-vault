@@ -348,6 +348,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('confirm-selection-btn').addEventListener('click', () => {
     confirmSelection();
   });
+  document.getElementById('cancel-selection-btn').addEventListener('click', () => {
+    cancelSelection();
+  });
   document.getElementById('select-recents-btn').addEventListener('click', () => {
     enterRecentsSelectionMode();
   });
@@ -356,6 +359,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('confirm-recents-selection-btn').addEventListener('click', () => {
     confirmRecentsSelection();
+  });
+  document.getElementById('cancel-recents-selection-btn').addEventListener('click', () => {
+    cancelRecentsSelection();
   });
 });
 
@@ -377,6 +383,7 @@ async function enterSelectionMode() {
   document.getElementById('select-projects-btn').style.display = 'none';
   document.getElementById('confirm-selection-btn').style.display = 'block';
   document.getElementById('confirm-selection-btn').textContent = 'Confirm Selection (0)';
+  document.getElementById('cancel-selection-btn').style.display = 'block';
   document.getElementById('context-message').textContent = 'Click project cards to select them, then click Confirm.';
   pollSelectionCount();
 }
@@ -402,6 +409,28 @@ function pollSelectionCount() {
   }, 500);
 }
 
+async function cancelSelection() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    if (isGptHost(tab.url || '')) {
+      await chrome.tabs.sendMessage(tab.id, { type: 'STOP_GPT_SELECTION_MODE' });
+    } else {
+      await chrome.tabs.sendMessage(tab.id, { type: 'STOP_SELECTION_MODE' });
+    }
+  } catch (e) {
+    // Content script unreachable (e.g. navigated away) — still reset local
+    // panel state below so the user isn't stuck in selection mode.
+  }
+  if (selectionPollTimer) {
+    clearInterval(selectionPollTimer);
+    selectionPollTimer = null;
+  }
+  selectionMode = false;
+  document.getElementById('confirm-selection-btn').style.display = 'none';
+  document.getElementById('cancel-selection-btn').style.display = 'none';
+  detectContext();
+}
+
 async function enterRecentsSelectionMode() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
@@ -420,6 +449,7 @@ async function enterRecentsSelectionMode() {
   document.getElementById('select-all-recents-btn').style.display = 'block';
   document.getElementById('confirm-recents-selection-btn').style.display = 'block';
   document.getElementById('confirm-recents-selection-btn').textContent = 'Confirm Selection (0)';
+  document.getElementById('cancel-recents-selection-btn').style.display = 'block';
   document.getElementById('context-message').textContent = 'Click conversation rows to select them, then click Confirm.';
   pollRecentsSelectionCount();
 }
@@ -443,6 +473,24 @@ function pollRecentsSelectionCount() {
       // last known count displayed rather than erroring the panel.
     }
   }, 500);
+}
+
+async function cancelRecentsSelection() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'STOP_RECENTS_SELECTION_MODE' });
+  } catch (e) {
+    // Content script unreachable — still reset local panel state.
+  }
+  if (recentsSelectionPollTimer) {
+    clearInterval(recentsSelectionPollTimer);
+    recentsSelectionPollTimer = null;
+  }
+  recentsSelectionMode = false;
+  document.getElementById('select-all-recents-btn').style.display = 'none';
+  document.getElementById('confirm-recents-selection-btn').style.display = 'none';
+  document.getElementById('cancel-recents-selection-btn').style.display = 'none';
+  detectContext();
 }
 
 async function selectAllRecents() {
@@ -921,6 +969,7 @@ async function startGptSelection() {
   selectBtn.style.display = 'none';
   confirmBtn.style.display = 'block';
   confirmBtn.textContent = 'Confirm Selection (0)';
+  document.getElementById('cancel-selection-btn').style.display = 'block';
   confirmBtn.onclick = () => confirmGptSelection(tab);
 
   const poll = setInterval(async () => {
