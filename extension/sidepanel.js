@@ -126,10 +126,10 @@ function setHomeActiveButton(isGpt) {
 }
 
 function detectGptContext(url, tab) {
-  if (selectionMode || batchInProgress) return;
-
   setHomeActiveButton(true);
   updateProviderNav(url, true);
+
+  if (selectionMode || batchInProgress) return;
 
   const exportBtn = document.getElementById('export-btn');
   const selectProjectsBtn = document.getElementById('select-projects-btn');
