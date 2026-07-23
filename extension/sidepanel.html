@@ -25,6 +25,7 @@
       --surface: #FFFFFF;
       --surface-inset: #FAF9F5;
       --border: #ECE9DE;
+      --separator: #D8D4C4;
       --text-primary: #0A0A0A;
       --text-secondary: #8A8A8A;
       --accent: #0A0A0A;
@@ -65,14 +66,31 @@
       margin: 0 0 14px;
     }
 
-    .home-actions {
+    .button-row {
       display: flex;
       gap: 8px;
     }
 
-    .home-actions button {
+    .button-row button {
       flex: 1;
       margin-top: 0;
+    }
+
+    .is-active-site {
+      background: var(--surface-inset);
+      color: var(--text-primary);
+      border-color: var(--border);
+    }
+
+    .is-active-site:hover:not(:disabled) {
+      background: var(--surface-inset);
+      opacity: 1;
+    }
+
+    .home-separator {
+      border: none;
+      border-top: 1px solid var(--separator);
+      margin: 20px 0;
     }
 
     .panel {
@@ -158,11 +176,12 @@
       individual chats, attachments and generated files all included in a single zip. Keep a
       permanent, searchable archive of your work that lives outside any one provider's dashboard.
     </p>
-    <div class="home-actions">
+    <div class="button-row">
       <button id="goto-claude-btn" type="button">Open Claude</button>
       <button id="goto-gpt-btn" type="button">Open ChatGPT</button>
     </div>
   </div>
+  <hr class="home-separator">
   <div class="panel">
     <div id="context-message"></div>
     <button id="export-btn" style="display:none;"></button>

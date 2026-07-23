@@ -102,8 +102,15 @@ async function captureProjectConversationImages(tabId, conversations, artifactsD
   }
 }
 
+function setHomeActiveButton(isGpt) {
+  document.getElementById('goto-claude-btn').classList.toggle('is-active-site', !isGpt);
+  document.getElementById('goto-gpt-btn').classList.toggle('is-active-site', isGpt);
+}
+
 function detectGptContext(url, tab) {
   if (selectionMode || batchInProgress) return;
+
+  setHomeActiveButton(true);
 
   const exportBtn = document.getElementById('export-btn');
   const selectProjectsBtn = document.getElementById('select-projects-btn');
@@ -151,6 +158,8 @@ async function detectContext() {
   if (isGptHost(url)) {
     return detectGptContext(url, tab);
   }
+
+  setHomeActiveButton(false);
 
   const contextMessage = document.getElementById('context-message');
   const exportBtn = document.getElementById('export-btn');
