@@ -329,7 +329,17 @@ function gptEnsureSelectionStyle() {
   if (document.getElementById('llmvault-gpt-style')) return;
   const style = document.createElement('style');
   style.id = 'llmvault-gpt-style';
-  style.textContent = `.${GPT_SELECTED_CLASS} { outline: 2px solid #e74c3c !important; outline-offset: -2px; }`;
+  // Same gold/amber highlight as Claude's project/recents selection (see
+  // content.js's ensureSelectionStyle) for a consistent selection style
+  // across both providers.
+  style.textContent = `
+    .${GPT_SELECTED_CLASS} {
+      outline: 3px solid #B8874B !important;
+      outline-offset: -3px !important;
+      background-color: rgba(184, 135, 75, 0.16) !important;
+      box-shadow: 0 4px 16px rgba(184, 135, 75, 0.4) !important;
+    }
+  `;
   document.head.appendChild(style);
 }
 
