@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LLM Vault",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Export Claude Project conversations or a single conversation as a structured Markdown zip.",
   "permissions": ["downloads", "activeTab", "cookies", "sidePanel", "tabs"],
   "host_permissions": ["https://claude.ai/*", "https://chatgpt.com/*"],
@@ -27,7 +27,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://claude.ai/project/*", "https://claude.ai/chat/*", "https://claude.ai/projects", "https://claude.ai/recents", "https://claude.ai/cowork/project/*", "https://claude.ai/cowork/projects", "https://claude.ai/chats"],
+      "matches": [
+        "https://claude.ai/project/*",
+        "https://claude.ai/chat/*",
+        "https://claude.ai/projects",
+        "https://claude.ai/recents",
+        "https://claude.ai/cowork/project/*",
+        "https://claude.ai/cowork/projects",
+        "https://claude.ai/chats"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     },
