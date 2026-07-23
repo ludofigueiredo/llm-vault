@@ -19,8 +19,8 @@ This extension is not published to the Chrome Web Store. Install it manually (re
 
 ## Usage
 
-1. Log into [claude.ai](https://claude.ai).
-2. Click the extension icon in your Chrome toolbar — a side panel opens and stays docked to the side of the browser window (it stays open across tab switches until you close it).
+1. Click the extension icon in your Chrome toolbar — a side panel opens and stays docked to the side of the browser window (it stays open across tab switches until you close it). The top of the panel always shows a home section with **Open Claude** / **Open ChatGPT** buttons that navigate your active tab to the respective site if you're not there already.
+2. Log into [claude.ai](https://claude.ai) (or [chatgpt.com](https://chatgpt.com)).
 3. Navigate to a Claude Project page (`claude.ai/project/[uuid]`) or a conversation page (`claude.ai/chat/[uuid]`); the panel updates to show the detected context.
 4. Click **Export Project** or **Export Conversation** (the button label depends on which page you're on).
 5. Wait for the export to complete — a `.zip` file will download automatically.
