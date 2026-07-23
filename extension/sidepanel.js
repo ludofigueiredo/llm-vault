@@ -6,6 +6,19 @@ let selectedProjects = [];
 let batchInProgress = false;
 let recentsSelectionMode = false;
 
+async function sendMessageWithRecovery(tabId, message, contentScriptFile) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (e) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: [contentScriptFile] });
+    } catch (injectError) {
+      throw e; // Injection itself failed (e.g. tab navigated away) — surface the original error.
+    }
+    return await chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
 function isProjectsListingUrl(url) {
   try {
     const parsed = new URL(url);
