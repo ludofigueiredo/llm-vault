@@ -6,6 +6,24 @@ let selectedProjects = [];
 let batchInProgress = false;
 let recentsSelectionMode = false;
 
+// Helper to log to console AND browser storage for easier debugging
+function debugLog(prefix, message, data) {
+  const timestamp = new Date().toISOString();
+  const fullMessage = `[${timestamp}] ${prefix}: ${message}`;
+  console.log(fullMessage, data || '');
+
+  // Also store in localStorage for debugging when console isn't accessible
+  try {
+    const logs = JSON.parse(localStorage.getItem('llmVaultLogs') || '[]');
+    logs.push({ timestamp, prefix, message, data });
+    // Keep only last 100 logs
+    if (logs.length > 100) logs.shift();
+    localStorage.setItem('llmVaultLogs', JSON.stringify(logs));
+  } catch (e) {
+    // localStorage not available
+  }
+}
+
 async function sendMessageWithRecovery(tabId, message, contentScriptFile) {
   try {
     return await chrome.tabs.sendMessage(tabId, message);
@@ -949,11 +967,11 @@ async function startGptProjectExport(url, tab) {
   status.className = '';
   status.textContent = 'Scraping GPT project...';
   try {
-    console.log(`[GPT Export] Starting project export from URL: ${url}`);
+    debugLog('GPT Export', `Starting project export from URL: ${url}`);
     const scraped = await gptScrapeProject(tab.id, url, (n, total, name) => {
       status.textContent = `Conversation ${n}/${total}: ${name}...`;
     });
-    console.log(`[GPT Export] Successfully scraped ${scraped.conversations.length} conversations`);
+    debugLog('GPT Export', `Successfully scraped ${scraped.conversations.length} conversations`);
     status.textContent = 'Building zip...';
     const zip = new JSZip();
     await gptBuildProjectInto(zip, null, scraped.project, scraped.conversations);
@@ -962,12 +980,12 @@ async function startGptProjectExport(url, tab) {
     triggerDownload(blob, `gpt_project_${safeName}.zip`);
     status.className = 'success';
     status.textContent = '✅ Export complete.';
-    console.log(`[GPT Export] Export complete for project: ${scraped.project.name}`);
+    debugLog('GPT Export', `Export complete for project: ${scraped.project.name}`);
   } catch (e) {
     const errorMsg = e.message || String(e);
-    console.error(`[GPT Export] Export failed: ${errorMsg}`, e);
+    debugLog('GPT Export', `Export failed: ${errorMsg}`, e);
     status.className = 'error';
-    status.textContent = `Export failed: ${errorMsg}`;
+    status.textContent = `❌ Export failed: ${errorMsg}`;
   } finally {
     batchInProgress = false;
     exportBtn.disabled = false;
@@ -1036,7 +1054,7 @@ async function runGptBatch(selected, tab) {
       const nav = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
       if (!nav || !nav.navigated) {
         const reason = 'failed to navigate to project';
-        console.error(`[GPT Batch] Project "${proj.name}": ${reason}`);
+        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
         failed.push({ name: proj.name, reason });
         continue;
       }
@@ -1044,7 +1062,7 @@ async function runGptBatch(selected, tab) {
       const projectUrl = await waitForGptProjectUrl(tab.id, 15000);
       if (!projectUrl) {
         const reason = 'project page URL did not load within timeout';
-        console.error(`[GPT Batch] Project "${proj.name}": ${reason}`);
+        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
         failed.push({ name: proj.name, reason });
         continue;
       }
@@ -1058,7 +1076,7 @@ async function runGptBatch(selected, tab) {
         // clicked (the list can reorder/filter between selecting and
         // navigating). Skip rather than export the wrong project.
         const reason = `name mismatch: expected "${expectedName}", got "${scrapedName}"`;
-        console.error(`[GPT Batch] Project "${proj.name}": ${reason}`);
+        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
         failed.push({ name: proj.name, reason });
         continue;
       }
@@ -1067,7 +1085,7 @@ async function runGptBatch(selected, tab) {
       succeeded++;
     } catch (e) {
       const reason = e.message || String(e);
-      console.error(`[GPT Batch] Project "${proj.name}": ${reason}`, e);
+      debugLog('GPT Batch', `Project "${proj.name}": ${reason}`, e);
       failed.push({ name: proj.name, reason });
     }
   }
@@ -1076,16 +1094,25 @@ async function runGptBatch(selected, tab) {
   if (succeeded === 0) {
     status.className = 'error';
     const details = failed.map(f => `${f.name}: ${f.reason}`).join('; ');
-    status.textContent = `All projects failed: ${details}`;
-    console.error(`[GPT Batch] All projects failed. Details: ${details}`);
+    status.textContent = `❌ All projects failed: ${details}`;
+    debugLog('GPT Batch', `All projects failed. Details: ${details}`);
     return;
   }
   status.textContent = 'Building zip...';
   const blob = await zip.generateAsync({ type: 'blob' });
   triggerDownload(blob, `gpt_projects_batch_${succeeded}.zip`);
-  status.className = 'success';
-  const failureDetails = failed.length ? ` Failed: ${failed.map(f => `${f.name} (${f.reason})`).join(', ')}` : '';
-  status.textContent = `✅ Exported ${succeeded}/${selected.length} project(s).${failureDetails}`;
+
+  // Use 'warning' class if some failed, 'success' only if all succeeded
+  if (failed.length > 0) {
+    status.className = 'warning';
+    const failureDetails = failed.map(f => `${f.name} (${f.reason})`).join(', ');
+    status.textContent = `⚠️ Exported ${succeeded}/${selected.length} project(s). Failed: ${failureDetails}`;
+    debugLog('GPT Batch', `Partial success: ${succeeded}/${selected.length} projects exported. Failed: ${failureDetails}`);
+  } else {
+    status.className = 'success';
+    status.textContent = `✅ Exported ${succeeded}/${selected.length} project(s).`;
+    debugLog('GPT Batch', `Success: All ${succeeded} projects exported.`);
+  }
 }
 
 // After NAVIGATE_GPT_PROJECT, the React app changes the tab URL to the
