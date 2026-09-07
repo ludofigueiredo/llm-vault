@@ -38,13 +38,27 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
   await chrome.tabs.update(tabId, { url: projectUrl });
   const projectPath = new URL(projectUrl).pathname;
   const ready = await waitForContentScriptReady(tabId, 15000, projectPath);
-  if (!ready) throw new Error('project page not ready');
+  if (!ready) throw new Error('project page did not load in time (content script not ready)');
 
   // 2. Instructions + conversation list.
-  const project = await sendMessageWithRecovery(tabId, { type: 'GET_GPT_PROJECT_METADATA' }, 'content-gpt.js');
-  const listResp = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_PROJECT_CONVERSATIONS' });
+  let project;
+  try {
+    project = await sendMessageWithRecovery(tabId, { type: 'GET_GPT_PROJECT_METADATA' }, 'content-gpt.js');
+  } catch (e) {
+    throw new Error(`failed to fetch project metadata: ${e.message}`);
+  }
+
+  let listResp;
+  try {
+    listResp = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_PROJECT_CONVERSATIONS' });
+  } catch (e) {
+    throw new Error(`failed to fetch conversation list: ${e.message}`);
+  }
+
   const conversations = (listResp && listResp.conversations) || [];
-  if (conversations.length === 0) throw new Error('no conversations');
+  if (conversations.length === 0) throw new Error('project has no conversations');
+
+  console.log(`[gptScrapeProject] Found ${conversations.length} conversations to scrape`);
 
   // 3. Visit each conversation and scrape its thread.
   // Prefer the real href scraped from the DOM (includes the -<slug> segment);
@@ -59,7 +73,11 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
     try {
       await chrome.tabs.update(tabId, { url: convUrl });
       const convReady = await waitForContentScriptReady(tabId, 15000, `/c/${conv.convId}`);
-      if (!convReady) { result.conversations.push({ ...conv, turns: [], files: [] }); continue; }
+      if (!convReady) {
+        console.warn(`[gptScrapeProject] Conversation "${conv.title}": content script not ready, skipping content`);
+        result.conversations.push({ ...conv, turns: [], files: [] });
+        continue;
+      }
       const data = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId });
       result.conversations.push({
         ...conv,
@@ -67,6 +85,7 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
         files: (data && data.files) || [],
       });
     } catch (e) {
+      console.warn(`[gptScrapeProject] Conversation "${conv.title}": ${e.message}`);
       result.conversations.push({ ...conv, turns: [], files: [] });
     }
   }

@@ -949,9 +949,11 @@ async function startGptProjectExport(url, tab) {
   status.className = '';
   status.textContent = 'Scraping GPT project...';
   try {
+    console.log(`[GPT Export] Starting project export from URL: ${url}`);
     const scraped = await gptScrapeProject(tab.id, url, (n, total, name) => {
       status.textContent = `Conversation ${n}/${total}: ${name}...`;
     });
+    console.log(`[GPT Export] Successfully scraped ${scraped.conversations.length} conversations`);
     status.textContent = 'Building zip...';
     const zip = new JSZip();
     await gptBuildProjectInto(zip, null, scraped.project, scraped.conversations);
@@ -959,10 +961,13 @@ async function startGptProjectExport(url, tab) {
     const safeName = gptSanitizeFilename(scraped.project.name || 'projet');
     triggerDownload(blob, `gpt_project_${safeName}.zip`);
     status.className = 'success';
-    status.textContent = 'Export complete.';
+    status.textContent = '✅ Export complete.';
+    console.log(`[GPT Export] Export complete for project: ${scraped.project.name}`);
   } catch (e) {
+    const errorMsg = e.message || String(e);
+    console.error(`[GPT Export] Export failed: ${errorMsg}`, e);
     status.className = 'error';
-    status.textContent = 'Export failed: ' + e.message;
+    status.textContent = `Export failed: ${errorMsg}`;
   } finally {
     batchInProgress = false;
     exportBtn.disabled = false;
@@ -1029,10 +1034,20 @@ async function runGptBatch(selected, tab) {
       await chrome.tabs.update(tab.id, { url: 'https://chatgpt.com/projects' });
       await waitForContentScriptReady(tab.id, 15000, '/projects');
       const nav = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
-      if (!nav || !nav.navigated) { failed.push(proj.name); continue; }
+      if (!nav || !nav.navigated) {
+        const reason = 'failed to navigate to project';
+        console.error(`[GPT Batch] Project "${proj.name}": ${reason}`);
+        failed.push({ name: proj.name, reason });
+        continue;
+      }
       // Wait for the project URL to appear, then scrape from it.
       const projectUrl = await waitForGptProjectUrl(tab.id, 15000);
-      if (!projectUrl) { failed.push(proj.name); continue; }
+      if (!projectUrl) {
+        const reason = 'project page URL did not load within timeout';
+        console.error(`[GPT Batch] Project "${proj.name}": ${reason}`);
+        failed.push({ name: proj.name, reason });
+        continue;
+      }
       const scraped = await gptScrapeProject(tab.id, projectUrl, (n, total, name) => {
         status.textContent = `Project ${i + 1}/${selected.length} — conv ${n}/${total}: ${name}...`;
       });
@@ -1042,28 +1057,35 @@ async function runGptBatch(selected, tab) {
         // Row index may have pointed at a different project than the one
         // clicked (the list can reorder/filter between selecting and
         // navigating). Skip rather than export the wrong project.
-        failed.push(`${expectedName} (mismatch: got "${scrapedName}")`);
+        const reason = `name mismatch: expected "${expectedName}", got "${scrapedName}"`;
+        console.error(`[GPT Batch] Project "${proj.name}": ${reason}`);
+        failed.push({ name: proj.name, reason });
         continue;
       }
       const folderName = gptSanitizeFilename(scraped.project.name || proj.name);
       await gptBuildProjectInto(zip, folderName, scraped.project, scraped.conversations);
       succeeded++;
     } catch (e) {
-      failed.push(proj.name);
+      const reason = e.message || String(e);
+      console.error(`[GPT Batch] Project "${proj.name}": ${reason}`, e);
+      failed.push({ name: proj.name, reason });
     }
   }
 
   batchInProgress = false;
   if (succeeded === 0) {
     status.className = 'error';
-    status.textContent = 'All projects failed: ' + failed.join(', ');
+    const details = failed.map(f => `${f.name}: ${f.reason}`).join('; ');
+    status.textContent = `All projects failed: ${details}`;
+    console.error(`[GPT Batch] All projects failed. Details: ${details}`);
     return;
   }
   status.textContent = 'Building zip...';
   const blob = await zip.generateAsync({ type: 'blob' });
   triggerDownload(blob, `gpt_projects_batch_${succeeded}.zip`);
   status.className = 'success';
-  status.textContent = `Exported ${succeeded} project(s).` + (failed.length ? ` Failed: ${failed.join(', ')}` : '');
+  const failureDetails = failed.length ? ` Failed: ${failed.map(f => `${f.name} (${f.reason})`).join(', ')}` : '';
+  status.textContent = `✅ Exported ${succeeded}/${selected.length} project(s).${failureDetails}`;
 }
 
 // After NAVIGATE_GPT_PROJECT, the React app changes the tab URL to the
