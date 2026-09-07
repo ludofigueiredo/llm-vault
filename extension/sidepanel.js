@@ -1049,23 +1049,36 @@ async function runGptBatch(selected, tab) {
     try {
       // Navigate by clicking the row (GPT rows have no href). We must be
       // back on the projects listing for the index to be valid.
+      debugLog('GPT Batch', `Project ${i + 1}/${selected.length}: Navigating to projects list...`);
       await chrome.tabs.update(tab.id, { url: 'https://chatgpt.com/projects' });
-      await waitForContentScriptReady(tab.id, 15000, '/projects');
+      const listReady = await waitForContentScriptReady(tab.id, 20000, '/projects');
+      if (!listReady) {
+        const reason = 'projects list page did not load within timeout';
+        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
+        failed.push({ name: proj.name, reason });
+        continue;
+      }
+
+      debugLog('GPT Batch', `Project "${proj.name}": Clicking project row at index ${proj.index}...`);
       const nav = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
       if (!nav || !nav.navigated) {
-        const reason = 'failed to navigate to project';
+        const reason = `failed to click project at index ${proj.index}`;
         debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
         failed.push({ name: proj.name, reason });
         continue;
       }
+
       // Wait for the project URL to appear, then scrape from it.
-      const projectUrl = await waitForGptProjectUrl(tab.id, 15000);
+      // ChatGPT React navigation can be slow, so use a generous timeout
+      debugLog('GPT Batch', `Project "${proj.name}": Waiting for project page to load...`);
+      const projectUrl = await waitForGptProjectUrl(tab.id, 30000);
       if (!projectUrl) {
-        const reason = 'project page URL did not load within timeout';
+        const reason = 'project page URL did not appear within 30 seconds';
         debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
         failed.push({ name: proj.name, reason });
         continue;
       }
+      debugLog('GPT Batch', `Project "${proj.name}": Project URL loaded: ${projectUrl}`);
       const scraped = await gptScrapeProject(tab.id, projectUrl, (n, total, name) => {
         status.textContent = `Project ${i + 1}/${selected.length} — conv ${n}/${total}: ${name}...`;
       });
@@ -1120,13 +1133,30 @@ async function runGptBatch(selected, tab) {
 function waitForGptProjectUrl(tabId, timeoutMs) {
   return new Promise((resolve) => {
     const start = Date.now();
+    let lastUrl = '';
     const poll = async () => {
       try {
         const tab = await chrome.tabs.get(tabId);
-        const ctx = gptDetectContext(tab.url || '');
-        if (ctx.kind === 'project') { resolve(tab.url); return; }
-      } catch (e) { /* ignore */ }
-      if (Date.now() - start >= timeoutMs) { resolve(null); return; }
+        const currentUrl = tab.url || '';
+        if (currentUrl !== lastUrl) {
+          lastUrl = currentUrl;
+          debugLog('URL Poll', `Tab URL: ${currentUrl}`);
+        }
+        const ctx = gptDetectContext(currentUrl);
+        if (ctx.kind === 'project') {
+          debugLog('URL Poll', `Project URL detected: ${currentUrl}`);
+          resolve(currentUrl);
+          return;
+        }
+      } catch (e) {
+        debugLog('URL Poll', `Error checking tab: ${e.message}`);
+      }
+      const elapsed = Date.now() - start;
+      if (elapsed >= timeoutMs) {
+        debugLog('URL Poll', `Timeout after ${elapsed}ms`);
+        resolve(null);
+        return;
+      }
       setTimeout(poll, 300);
     };
     poll();
