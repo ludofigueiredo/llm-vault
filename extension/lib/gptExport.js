@@ -33,6 +33,29 @@ async function gptBuildProjectInto(zip, folderPath, project, conversationsWithDa
   }
 }
 
+// Sends a message and retries once on failure. Covers two distinct causes
+// of "the message channel closed before a response was received":
+// (1) the content script instance was torn down mid-request because the
+// page navigated/re-rendered out from under us (e.g. GET_GPT_PROJECT_METADATA
+// clicking the details button/dialog can itself perturb the page just before
+// the next message is sent), and (2) a stale content script reference from
+// before a chrome.tabs.update() finished. A short delay + retry recovers
+// from both without failing the whole project export.
+async function gptSendMessageWithRetry(tabId, message, retries, delayMs) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (e) {
+      lastError = e;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function gptScrapeProject(tabId, projectUrl, onProgress) {
   // 1. Navigate to the project page and wait for the content script.
   await chrome.tabs.update(tabId, { url: projectUrl });
@@ -48,9 +71,17 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
     throw new Error(`failed to fetch project metadata: ${e.message}`);
   }
 
+  // GET_GPT_PROJECT_METADATA clicks the project's details button/dialog to
+  // read instructions, then closes it — give that interaction a moment to
+  // fully settle before the next message, since a dialog-close animation or
+  // stray re-render can otherwise tear down the message channel mid-flight
+  // for the very next call (this is what "message channel closed before a
+  // response was received" on GET_GPT_PROJECT_CONVERSATIONS came from).
+  await new Promise((r) => setTimeout(r, 500));
+
   let listResp;
   try {
-    listResp = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_PROJECT_CONVERSATIONS' });
+    listResp = await gptSendMessageWithRetry(tabId, { type: 'GET_GPT_PROJECT_CONVERSATIONS' }, 2, 1000);
   } catch (e) {
     throw new Error(`failed to fetch conversation list: ${e.message}`);
   }
@@ -87,7 +118,7 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
         result.conversations.push({ ...conv, turns: [], files: [] });
         continue;
       }
-      const data = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId });
+      const data = await gptSendMessageWithRetry(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId }, 1, 800);
       result.conversations.push({
         ...conv,
         turns: (data && data.turns) || [],
