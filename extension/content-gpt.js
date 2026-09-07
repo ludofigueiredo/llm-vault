@@ -180,6 +180,20 @@ function gptFindConversationLinks() {
   );
 }
 
+// Visual confirmation, mirroring the gold/amber selection highlight used
+// elsewhere: briefly outlines every conversation row found on a project page
+// so a user watching the tab can see the extension is scraping the correct
+// project's conversation list (helps catch a navigation-to-wrong-project bug
+// at a glance, without needing to read console logs).
+function gptHighlightConversationRows() {
+  gptEnsureSelectionStyle();
+  const links = gptFindConversationLinks();
+  for (const a of links) {
+    a.classList.add(GPT_SELECTED_CLASS);
+  }
+  return links.length;
+}
+
 function gptScrapeConversationList() {
   const seen = new Set();
   const conversations = [];
@@ -219,6 +233,7 @@ function gptWaitForListToStabilize(timeoutMs, stableChecksRequired, intervalMs) 
 
 async function gptGetProjectConversations() {
   await gptWaitForListToStabilize(30000, 3, 500);
+  gptHighlightConversationRows();
   return { conversations: gptScrapeConversationList() };
 }
 
@@ -407,14 +422,60 @@ function gptStopSelectionMode() {
   gptSelectedProjectsByIndex = new Map();
 }
 
+// A plain el.click() doesn't always trigger React Router navigation on
+// ChatGPT's project rows — React's synthetic event system expects a fuller
+// pointer/mouse event sequence (pointerdown → mousedown → mouseup → click),
+// each bubbling with isTrusted-like properties. Dispatching just 'click'
+// works most of the time but is flaky under load; firing the whole sequence
+// makes the click far more reliable.
+function gptFireFullClick(el) {
+  const rect = el.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+  el.dispatchEvent(new PointerEvent('pointerdown', opts));
+  el.dispatchEvent(new MouseEvent('mousedown', opts));
+  el.dispatchEvent(new PointerEvent('pointerup', opts));
+  el.dispatchEvent(new MouseEvent('mouseup', opts));
+  el.dispatchEvent(new MouseEvent('click', opts));
+}
+
+// Fires a real Enter keypress sequence. The row itself carries
+// tabindex="0" + aria-selected (a keyboard-navigable grid row per the WAI-ARIA
+// grid pattern), which means its navigation handler is very likely bound to
+// keydown/keyup on the row rather than (or in addition to) a click on a
+// specific gridcell. Focusing the row and firing Enter mirrors exactly what
+// a keyboard user does, which React's grid implementation must support
+// regardless of how the mouse-click handler is wired.
+function gptFireEnterKey(el) {
+  const opts = { bubbles: true, cancelable: true, view: window, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 };
+  el.dispatchEvent(new KeyboardEvent('keydown', opts));
+  el.dispatchEvent(new KeyboardEvent('keyup', opts));
+}
+
 function gptNavigateProject(index) {
   const rows = gptFindProjectRows();
   const row = rows[index];
-  if (!row) return { navigated: false, name: '' };
+  if (!row) return { navigated: false, name: '', reason: `no project row at index ${index}` };
   const name = gptRowName(row);
-  // The row's first gridcell is the clickable navigation target.
+
+  // Try the gridcell click first (mouse-style interaction)...
   const target = row.querySelector('[role="gridcell"]') || row;
-  target.click();
+  gptFireFullClick(target);
+
+  // ...then, as a fallback in the same pass, also focus the row and fire a
+  // real Enter keypress. The row is a keyboard-navigable grid row
+  // (tabindex="0" + aria-selected), so its "activate" handler is very
+  // likely bound to keydown, independent of whatever the click handler
+  // does. Firing both maximizes the chance one of them actually triggers
+  // React Router navigation.
+  try {
+    row.focus();
+  } catch (e) {
+    // Row may not be focusable in this state; ignore.
+  }
+  gptFireEnterKey(row);
+
   return { navigated: true, name };
 }
 

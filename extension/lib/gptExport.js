@@ -37,7 +37,7 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
   // 1. Navigate to the project page and wait for the content script.
   await chrome.tabs.update(tabId, { url: projectUrl });
   const projectPath = new URL(projectUrl).pathname;
-  const ready = await waitForContentScriptReady(tabId, 15000, projectPath);
+  const ready = await waitForContentScriptReady(tabId, 20000, projectPath);
   if (!ready) throw new Error('project page did not load in time (content script not ready)');
 
   // 2. Instructions + conversation list.
@@ -56,7 +56,16 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
   }
 
   const conversations = (listResp && listResp.conversations) || [];
-  if (conversations.length === 0) throw new Error('project has no conversations');
+
+  // An empty project is a legitimate state (e.g. a freshly created project,
+  // or one used only to hold instructions/knowledge files), not an export
+  // failure — build it with zero conversations instead of throwing, so the
+  // caller can report it as a warning rather than counting it against
+  // "failed" projects.
+  if (conversations.length === 0) {
+    console.warn('[gptScrapeProject] Project has no conversations');
+    return { project, conversations: [], empty: true };
+  }
 
   console.log(`[gptScrapeProject] Found ${conversations.length} conversations to scrape`);
 

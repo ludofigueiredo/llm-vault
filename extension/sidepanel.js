@@ -978,9 +978,15 @@ async function startGptProjectExport(url, tab) {
     const blob = await zip.generateAsync({ type: 'blob' });
     const safeName = gptSanitizeFilename(scraped.project.name || 'projet');
     triggerDownload(blob, `gpt_project_${safeName}.zip`);
-    status.className = 'success';
-    status.textContent = '✅ Export complete.';
-    debugLog('GPT Export', `Export complete for project: ${scraped.project.name}`);
+    if (scraped.empty) {
+      status.className = 'warning';
+      status.textContent = '⚠️ Export complete, but this project has no conversations.';
+      debugLog('GPT Export', `Export complete for project: ${scraped.project.name} (no conversations)`);
+    } else {
+      status.className = 'success';
+      status.textContent = '✅ Export complete.';
+      debugLog('GPT Export', `Export complete for project: ${scraped.project.name}`);
+    }
   } catch (e) {
     const errorMsg = e.message || String(e);
     debugLog('GPT Export', `Export failed: ${errorMsg}`, e);
@@ -1025,12 +1031,86 @@ async function startGptSelection() {
   }, 500);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function confirmGptSelection(tab) {
   const selected = await chrome.tabs.sendMessage(tab.id, { type: 'GET_GPT_SELECTED_PROJECTS' });
   await chrome.tabs.sendMessage(tab.id, { type: 'STOP_GPT_SELECTION_MODE' });
   selectionMode = false;
   if (!selected || selected.length === 0) return;
+
+  // Echo back exactly what will be exported before driving any navigation,
+  // so a stale/misclicked selection is caught before the batch (which can
+  // take minutes) runs against the wrong projects.
+  const names = selected.map((p) => p.name || `#${p.index}`).join(', ');
+  const proceed = window.confirm(`Export ${selected.length} project(s)?\n\n${names}`);
+  if (!proceed) {
+    setStatus('Export cancelled.', '');
+    detectContext();
+    return;
+  }
+
   await runGptBatch(selected, tab);
+}
+
+// Navigating a single project is split out so it can be retried: ChatGPT's
+// React app needs to fully hydrate the freshly-rendered project rows before
+// a synthetic click reliably triggers client-side routing, and the click
+// itself is not 100% deterministic even with a full pointer/mouse event
+// sequence (see gptFireFullClick in content-gpt.js). Retrying with a fresh
+// re-navigation to /projects and a growing settle delay clears up the vast
+// majority of transient misses without giving up on the whole project —
+// this matters more the later a project sits in the batch, since the SPA
+// has accumulated more state/pending work by then.
+async function gptNavigateToProjectWithRetry(tabId, proj, status, i, total, attempts) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const attemptLabel = attempts > 1 ? ` (attempt ${attempt}/${attempts})` : '';
+    debugLog('GPT Batch', `Project "${proj.name}": Navigating to projects list${attemptLabel}...`);
+    status.textContent = `Project ${i + 1}/${total}: ${proj.name}${attemptLabel}...`;
+    await chrome.tabs.update(tabId, { url: 'https://chatgpt.com/projects' });
+    const listReady = await waitForContentScriptReady(tabId, 20000, '/projects');
+    if (!listReady) {
+      debugLog('GPT Batch', `Project "${proj.name}": projects list page did not load within timeout${attemptLabel}`);
+      await sleep(1500 * attempt);
+      continue;
+    }
+
+    // The list can finish PING-responding before React has hydrated/attached
+    // click handlers to the freshly rendered rows — give it a moment to
+    // settle. Later attempts wait longer, since a page that's still busy
+    // (e.g. the SPA hasn't finished settling from the previous project's
+    // navigation) needs more time, not an immediate retry.
+    await sleep(1200 * attempt);
+
+    debugLog('GPT Batch', `Project "${proj.name}": Clicking project row at index ${proj.index}...`);
+    let nav;
+    try {
+      nav = await chrome.tabs.sendMessage(tabId, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
+    } catch (e) {
+      debugLog('GPT Batch', `Project "${proj.name}": click message failed: ${e.message}${attemptLabel}`);
+      continue;
+    }
+    if (!nav || !nav.navigated) {
+      debugLog('GPT Batch', `Project "${proj.name}": failed to click project at index ${proj.index}${attemptLabel}`);
+      continue;
+    }
+
+    // Give the click a brief moment to register before polling for the URL
+    // change — polling immediately can catch the tab mid-click-handler.
+    await sleep(500);
+
+    debugLog('GPT Batch', `Project "${proj.name}": Waiting for project page to load...`);
+    const projectUrl = await waitForGptProjectUrl(tabId, 30000);
+    if (!projectUrl) {
+      debugLog('GPT Batch', `Project "${proj.name}": project page URL did not appear within 30 seconds${attemptLabel}`);
+      continue;
+    }
+    debugLog('GPT Batch', `Project "${proj.name}": Project URL loaded: ${projectUrl}`);
+    return { ok: true, projectUrl };
+  }
+  return { ok: false, reason: `navigation to project failed after ${attempts} attempt(s)` };
 }
 
 async function runGptBatch(selected, tab) {
@@ -1041,44 +1121,26 @@ async function runGptBatch(selected, tab) {
   status.className = '';
   const zip = new JSZip();
   const failed = [];
+  const warnings = [];
   let succeeded = 0;
 
   for (let i = 0; i < selected.length; i++) {
     const proj = selected[i];
     status.textContent = `Project ${i + 1}/${selected.length}: ${proj.name}...`;
     try {
-      // Navigate by clicking the row (GPT rows have no href). We must be
-      // back on the projects listing for the index to be valid.
-      debugLog('GPT Batch', `Project ${i + 1}/${selected.length}: Navigating to projects list...`);
-      await chrome.tabs.update(tab.id, { url: 'https://chatgpt.com/projects' });
-      const listReady = await waitForContentScriptReady(tab.id, 20000, '/projects');
-      if (!listReady) {
-        const reason = 'projects list page did not load within timeout';
-        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
-        failed.push({ name: proj.name, reason });
+      const navResult = await gptNavigateToProjectWithRetry(tab.id, proj, status, i, selected.length, 3);
+      if (!navResult.ok) {
+        debugLog('GPT Batch', `Project "${proj.name}": ${navResult.reason}`);
+        failed.push({ name: proj.name, reason: navResult.reason });
         continue;
       }
+      const projectUrl = navResult.projectUrl;
 
-      debugLog('GPT Batch', `Project "${proj.name}": Clicking project row at index ${proj.index}...`);
-      const nav = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
-      if (!nav || !nav.navigated) {
-        const reason = `failed to click project at index ${proj.index}`;
-        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
-        failed.push({ name: proj.name, reason });
-        continue;
-      }
+      // A settle delay before scraping: the project page itself needs a
+      // moment past first paint for its own content (conversation list,
+      // details button) to be interactive.
+      await sleep(800);
 
-      // Wait for the project URL to appear, then scrape from it.
-      // ChatGPT React navigation can be slow, so use a generous timeout
-      debugLog('GPT Batch', `Project "${proj.name}": Waiting for project page to load...`);
-      const projectUrl = await waitForGptProjectUrl(tab.id, 30000);
-      if (!projectUrl) {
-        const reason = 'project page URL did not appear within 30 seconds';
-        debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
-        failed.push({ name: proj.name, reason });
-        continue;
-      }
-      debugLog('GPT Batch', `Project "${proj.name}": Project URL loaded: ${projectUrl}`);
       const scraped = await gptScrapeProject(tab.id, projectUrl, (n, total, name) => {
         status.textContent = `Project ${i + 1}/${selected.length} — conv ${n}/${total}: ${name}...`;
       });
@@ -1092,6 +1154,13 @@ async function runGptBatch(selected, tab) {
         debugLog('GPT Batch', `Project "${proj.name}": ${reason}`);
         failed.push({ name: proj.name, reason });
         continue;
+      }
+      if (scraped.empty) {
+        // No conversations is a legitimate state, not an export failure —
+        // still export the project (index.md/instructions.md only) and
+        // surface it as a warning rather than a failure.
+        debugLog('GPT Batch', `Project "${proj.name}": no conversations found (exported empty)`);
+        warnings.push({ name: proj.name, reason: 'no conversations found' });
       }
       const folderName = gptSanitizeFilename(scraped.project.name || proj.name);
       await gptBuildProjectInto(zip, folderName, scraped.project, scraped.conversations);
@@ -1115,12 +1184,15 @@ async function runGptBatch(selected, tab) {
   const blob = await zip.generateAsync({ type: 'blob' });
   triggerDownload(blob, `gpt_projects_batch_${succeeded}.zip`);
 
-  // Use 'warning' class if some failed, 'success' only if all succeeded
-  if (failed.length > 0) {
+  // Use 'warning' class if anything failed or was empty, 'success' only if
+  // every project exported cleanly with conversations.
+  if (failed.length > 0 || warnings.length > 0) {
     status.className = 'warning';
-    const failureDetails = failed.map(f => `${f.name} (${f.reason})`).join(', ');
-    status.textContent = `⚠️ Exported ${succeeded}/${selected.length} project(s). Failed: ${failureDetails}`;
-    debugLog('GPT Batch', `Partial success: ${succeeded}/${selected.length} projects exported. Failed: ${failureDetails}`);
+    const parts = [];
+    if (warnings.length > 0) parts.push(`⚠️ Empty: ${warnings.map(w => w.name).join(', ')}`);
+    if (failed.length > 0) parts.push(`❌ Failed: ${failed.map(f => `${f.name} (${f.reason})`).join(', ')}`);
+    status.textContent = `Exported ${succeeded}/${selected.length} project(s). ${parts.join(' ')}`;
+    debugLog('GPT Batch', `Partial success: ${succeeded}/${selected.length} exported. ${parts.join(' ')}`);
   } else {
     status.className = 'success';
     status.textContent = `✅ Exported ${succeeded}/${selected.length} project(s).`;
