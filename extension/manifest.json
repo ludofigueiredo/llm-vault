@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LLM Vault — Claude & ChatGPT Exporter",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Export Claude or ChatGPT Project conversations as structured Markdown zip files.",
   "permissions": [
     "downloads",
