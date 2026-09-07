@@ -100,24 +100,21 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
 
   console.log(`[gptScrapeProject] Found ${conversations.length} conversations to scrape`);
 
-  // 3. Visit each conversation and scrape its thread.
-  // Prefer the real href scraped from the DOM (includes the -<slug> segment);
-  // only reconstruct from the project URL as a fallback if it's missing.
+  // 3. Fetch each conversation's content via /backend-api/conversation/<id>.
+  // This is a same-origin fetch keyed purely by convId — it does not read
+  // anything from a specific conversation page's DOM, so there is no need
+  // to navigate the tab to each conversation's URL first. We stay on the
+  // project page (still the active tab from step 1/2) for every fetch,
+  // which removes an entire chrome.tabs.update + waitForContentScriptReady
+  // cycle per conversation — previously the single largest source of
+  // navigation-timing flakiness in a project export (a click landing wrong,
+  // a page taking >15s to report ready, a message channel torn down by a
+  // navigation racing the request).
   const result = { project, conversations: [] };
   for (let i = 0; i < conversations.length; i++) {
     const conv = conversations[i];
     if (onProgress) onProgress(i + 1, conversations.length, conv.title);
-    const origin = new URL(projectUrl).origin;
-    const convUrl = conv.url
-      || `${origin}${projectUrl.replace(origin, '').replace(/\/project$/, '')}/c/${conv.convId}`;
     try {
-      await chrome.tabs.update(tabId, { url: convUrl });
-      const convReady = await waitForContentScriptReady(tabId, 15000, `/c/${conv.convId}`);
-      if (!convReady) {
-        console.warn(`[gptScrapeProject] Conversation "${conv.title}": content script not ready, skipping content`);
-        result.conversations.push({ ...conv, turns: [], files: [] });
-        continue;
-      }
       const data = await gptSendMessageWithRetry(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId }, 1, 800);
       result.conversations.push({
         ...conv,
