@@ -33,14 +33,12 @@ async function gptBuildProjectInto(zip, folderPath, project, conversationsWithDa
   }
 }
 
-// Sends a message and retries once on failure. Covers two distinct causes
-// of "the message channel closed before a response was received":
-// (1) the content script instance was torn down mid-request because the
-// page navigated/re-rendered out from under us (e.g. GET_GPT_PROJECT_METADATA
-// clicking the details button/dialog can itself perturb the page just before
-// the next message is sent), and (2) a stale content script reference from
-// before a chrome.tabs.update() finished. A short delay + retry recovers
-// from both without failing the whole project export.
+// Sends a message and retries on failure, with a delay between attempts.
+// Guards against transient issues: a stale content script reference from
+// just after a chrome.tabs.update() (navigation initiated but not yet
+// complete), or an ordinary network hiccup in the content script's own
+// fetch to /backend-api. A short delay + retry recovers from both without
+// failing the whole project export.
 async function gptSendMessageWithRetry(tabId, message, retries, delayMs) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -70,14 +68,6 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
   } catch (e) {
     throw new Error(`failed to fetch project metadata: ${e.message}`);
   }
-
-  // GET_GPT_PROJECT_METADATA clicks the project's details button/dialog to
-  // read instructions, then closes it — give that interaction a moment to
-  // fully settle before the next message, since a dialog-close animation or
-  // stray re-render can otherwise tear down the message channel mid-flight
-  // for the very next call (this is what "message channel closed before a
-  // response was received" on GET_GPT_PROJECT_CONVERSATIONS came from).
-  await new Promise((r) => setTimeout(r, 500));
 
   let listResp;
   try {

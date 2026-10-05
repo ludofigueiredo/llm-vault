@@ -1,20 +1,11 @@
 // GPT content script — injected on chatgpt.com. Fully independent of the
-// Claude content.js. Uses DOM scraping for project-scoped data (instructions,
-// the project's conversation list, multi-project selection) and ChatGPT's
-// internal /backend-api for conversation content and file downloads.
-
-function gptWaitForCondition(checkFn, timeoutMs, intervalMs) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const poll = () => {
-      const result = checkFn();
-      if (result) { resolve(result); return; }
-      if (Date.now() - start >= timeoutMs) { resolve(null); return; }
-      setTimeout(poll, intervalMs);
-    };
-    poll();
-  });
-}
+// Claude content.js. Uses DOM scraping only for multi-project selection on
+// /projects (no API exposes that listing) and to discover a selected
+// project's id by navigating to its project page. Project metadata, a
+// project's conversation list, and conversation content/files are all
+// fetched from ChatGPT's internal /backend-api, called from this content
+// script running in the page's own origin (so session cookies/token apply
+// automatically, no separate auth needed).
 
 function gptStripCitations(str) {
   return str.replace(/【[^】]*】/g, '');
@@ -118,126 +109,13 @@ function gptGetProjectTitle() {
   return h1 ? h1.textContent.trim() : '';
 }
 
-function gptFindVisibleDetailsButton() {
-  // The details button can be duplicated across responsive layouts; pick the
-  // one that's actually rendered (offsetParent is null for display:none).
-  const buttons = document.querySelectorAll('button[aria-label="Afficher les détails du projet"]');
-  for (const btn of buttons) {
-    if (btn.offsetParent !== null) return btn;
-  }
-  return buttons[0] || null;
-}
-
-function gptFindProjectSettingsMenuItem() {
-  // The details button opens an intermediate menu; we want its
-  // "Paramètres du projet" item, which opens the settings dialog.
-  const items = document.querySelectorAll('[role="menuitem"]');
-  for (const item of items) {
-    if (item.textContent.trim() === 'Paramètres du projet') return item;
-  }
-  return null;
-}
-
-async function gptGetProjectMetadata() {
-  const fallback = { name: gptGetProjectTitle(), instructions: '' };
-
-  const detailsBtn = gptFindVisibleDetailsButton();
-  if (!detailsBtn) return fallback;
-  detailsBtn.click();
-
-  // Step 1: the details button opens a menu — click its "Paramètres du
-  // projet" item to reach the settings dialog (the dialog does not open
-  // directly from the details button).
-  const menuItem = await gptWaitForCondition(gptFindProjectSettingsMenuItem, 5000, 100);
-  if (!menuItem) return fallback;
-  menuItem.click();
-
-  // Step 2: wait for the settings dialog with the name/instructions fields.
-  const dialog = await gptWaitForCondition(
-    () => document.querySelector('div[role="dialog"] input#project-name'),
-    5000, 100
-  );
-  if (!dialog) return fallback;
-
-  const nameInput = document.querySelector('div[role="dialog"] input#project-name');
-  const instrArea = document.querySelector('div[role="dialog"] textarea#instructions');
-  const result = {
-    name: (nameInput && nameInput.value.trim()) || fallback.name,
-    instructions: (instrArea && instrArea.value.trim()) || '',
-  };
-
-  const closeBtn = document.querySelector('div[role="dialog"] button[data-testid="close-button"]');
-  if (closeBtn) closeBtn.click();
-
-  return result;
-}
-
-function gptFindConversationLinks() {
-  // Conversation rows on a project page carry a real href:
-  // /g/g-p-<id>/c/<convId> or /g/g-p-<id>-<slug>/c/<convId> — the updated
-  // (circa Oct 2026) project page UI dropped the "-<slug>" segment from the
-  // href entirely (confirmed live: now plain /g/g-p-<id>/c/<convId>), so the
-  // slug must be optional here, not required as it was before.
-  return [...document.querySelectorAll('a[href*="/c/"]')].filter((a) =>
-    /\/g\/g-p-[a-f0-9]+(?:-[^/]*)?\/c\/[a-f0-9-]+/.test(a.getAttribute('href') || '')
-  );
-}
-
-// Visual confirmation, mirroring the gold/amber selection highlight used
-// elsewhere: briefly outlines every conversation row found on a project page
-// so a user watching the tab can see the extension is scraping the correct
-// project's conversation list (helps catch a navigation-to-wrong-project bug
-// at a glance, without needing to read console logs).
-function gptHighlightConversationRows() {
-  gptEnsureSelectionStyle();
-  const links = gptFindConversationLinks();
-  for (const a of links) {
-    a.classList.add(GPT_SELECTED_CLASS);
-  }
-  return links.length;
-}
-
-function gptScrapeConversationList() {
-  const seen = new Set();
-  const conversations = [];
-  for (const a of gptFindConversationLinks()) {
-    const href = a.getAttribute('href');
-    const m = href.match(/\/c\/([a-f0-9-]+)/);
-    if (!m) continue;
-    const convId = m[1];
-    if (seen.has(convId)) continue;
-    seen.add(convId);
-    const titleEl = a.querySelector('.text-sm.font-medium');
-    const title = (titleEl && titleEl.textContent.trim()) || convId;
-    const url = new URL(href, window.location.origin).href;
-    conversations.push({ title, convId, url });
-  }
-  return conversations;
-}
-
-function gptWaitForListToStabilize(timeoutMs, stableChecksRequired, intervalMs) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    let lastCount = -1;
-    let stableChecks = 0;
-    const poll = () => {
-      window.scrollTo(0, document.body.scrollHeight);
-      const count = gptFindConversationLinks().length;
-      if (count === lastCount) { stableChecks++; }
-      else { stableChecks = 0; lastCount = count; }
-      if (stableChecks >= stableChecksRequired || Date.now() - start >= timeoutMs) {
-        resolve(count); return;
-      }
-      setTimeout(poll, intervalMs);
-    };
-    poll();
-  });
-}
-
-async function gptGetProjectConversations() {
-  await gptWaitForListToStabilize(30000, 3, 500);
-  gptHighlightConversationRows();
-  return { conversations: gptScrapeConversationList() };
+// Extracts the g-p-<hex> project id from the current page's own URL — used
+// once we're already on a project page (after gptNavigateProject) to call
+// the gizmos API for that project, without needing a second DOM scrape.
+// Mirrors gptDetectContext's 'project' pattern in gptDetect.js.
+function gptGetProjectIdFromLocation() {
+  const m = window.location.pathname.match(/^\/g\/(g-p-[a-f0-9]+)(?:-[^/]*)?\/(?:project|c)\b/);
+  return m ? m[1] : null;
 }
 
 let gptCachedToken = null;
@@ -269,6 +147,65 @@ async function gptApiGet(path, token) {
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
+}
+
+// Project metadata (name + instructions) via the gizmos API, replacing the
+// previous DOM-scrape that opened the project's details dialog to read
+// input#project-name/textarea#instructions — that dialog flow was fragile
+// (multi-step click sequence, 5s timeouts at each step) and the UI it
+// depends on can change independently of this data actually being
+// available directly from /backend-api/gizmos/<projectId>.
+async function gptGetProjectMetadata() {
+  const fallback = { name: gptGetProjectTitle(), instructions: '' };
+  const projectId = gptGetProjectIdFromLocation();
+  if (!projectId) return fallback;
+
+  try {
+    const token = await gptGetSessionToken();
+    const resp = await gptApiGet(`gizmos/${projectId}?include_file_limits=true`, token);
+    const gizmo = resp && resp.gizmo;
+    if (!gizmo) return fallback;
+    return {
+      name: (gizmo.display && gizmo.display.name) || fallback.name,
+      instructions: (gizmo.instructions || '').trim(),
+    };
+  } catch (e) {
+    return fallback;
+  }
+}
+
+// Project's conversation list via the gizmos API, replacing the previous
+// DOM-scrape (auto-scroll + stabilize + parse <a href> links) — that relied
+// on the project page rendering every conversation as a real link, which
+// broke once already (slug segment dropped from the href). The API gives
+// {id, title} directly with no DOM/rendering dependency at all, and pages
+// via `cursor` instead of scrolling.
+async function gptGetProjectConversationsViaApi(projectId) {
+  const token = await gptGetSessionToken();
+  const conversations = [];
+  let cursor = null;
+  do {
+    const query = `limit=50&owned_only=false${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+    const resp = await gptApiGet(`gizmos/${projectId}/conversations?${query}`, token);
+    const items = (resp && resp.items) || [];
+    for (const item of items) {
+      if (!item || !item.id) continue;
+      conversations.push({
+        title: item.title || item.id,
+        convId: item.id,
+        url: `${window.location.origin}/g/${projectId}/c/${item.id}`,
+      });
+    }
+    cursor = (resp && resp.cursor) || null;
+  } while (cursor);
+  return conversations;
+}
+
+async function gptGetProjectConversations() {
+  const projectId = gptGetProjectIdFromLocation();
+  if (!projectId) return { conversations: [] };
+  const conversations = await gptGetProjectConversationsViaApi(projectId);
+  return { conversations };
 }
 
 const GPT_MIME_TO_EXT = {
@@ -469,10 +406,11 @@ function gptNavigateProject(index) {
   // expand/collapse toggle) don't navigate either. The one button that does
   // navigate to the dedicated project page (/g/g-p-<id>-<slug>/project) is
   // "Démarrer un nouveau chat dans le projet" ("start a new chat in this
-  // project") — confirmed live. That page is still the one with real
-  // conversation `<a href="/c/...">` links (gptFindConversationLinks()),
-  // unlike the /projects inline preview, so it's still needed to list and
-  // scrape the project's conversations.
+  // project") — confirmed live. Navigating there is still required (not to
+  // scrape its DOM anymore — see gptGetProjectConversations, now API-based
+  // — but to read the project id, g-p-<hex>, out of the destination URL via
+  // gptGetProjectIdFromLocation(), since no selectable-mode DOM element on
+  // /projects itself exposes that id).
   const newChatBtn = row.querySelector('button[aria-label="Démarrer un nouveau chat dans le projet"]');
   if (!newChatBtn) return { navigated: false, name, reason: 'could not find the project-navigation button' };
   gptFireFullClick(newChatBtn);
