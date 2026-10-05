@@ -174,9 +174,12 @@ async function gptGetProjectMetadata() {
 
 function gptFindConversationLinks() {
   // Conversation rows on a project page carry a real href:
-  // /g/g-p-<id>-<slug>/c/<convId>
+  // /g/g-p-<id>/c/<convId> or /g/g-p-<id>-<slug>/c/<convId> — the updated
+  // (circa Oct 2026) project page UI dropped the "-<slug>" segment from the
+  // href entirely (confirmed live: now plain /g/g-p-<id>/c/<convId>), so the
+  // slug must be optional here, not required as it was before.
   return [...document.querySelectorAll('a[href*="/c/"]')].filter((a) =>
-    /\/g\/g-p-[a-f0-9]+-[^/]*\/c\/[a-f0-9-]+/.test(a.getAttribute('href') || '')
+    /\/g\/g-p-[a-f0-9]+(?:-[^/]*)?\/c\/[a-f0-9-]+/.test(a.getAttribute('href') || '')
   );
 }
 
@@ -459,17 +462,20 @@ function gptNavigateProject(index) {
   const name = gptRowName(row);
 
   // The new markup (circa Oct 2026) has no ARIA grid/row/gridcell roles and
-  // no tabindex on the row, so neither the old gridcell-click nor the
-  // Enter-keypress fallback has anything reliable to target. The row itself
-  // is also not a single click target: it contains its own expand/collapse
-  // toggle (aria-label="Développer ou réduire le projet") plus pin/new-chat/
-  // menu action buttons, all of which must NOT be clicked (they toggle
-  // inline expansion or open a menu instead of navigating). The project
-  // *name* span is the one element whose only behavior is "open this
-  // project", so it's the click target.
-  const nameEl = row.querySelector('span.truncate');
-  if (!nameEl) return { navigated: false, name, reason: 'could not find project name element to click' };
-  gptFireFullClick(nameEl);
+  // no tabindex on the row, and the row itself is no longer a navigation
+  // target at all: clicking the project name only toggles the row's own
+  // inline-expanded conversation preview in place (confirmed live — it does
+  // not change the URL), and the row's other buttons (pin, "..." menu,
+  // expand/collapse toggle) don't navigate either. The one button that does
+  // navigate to the dedicated project page (/g/g-p-<id>-<slug>/project) is
+  // "Démarrer un nouveau chat dans le projet" ("start a new chat in this
+  // project") — confirmed live. That page is still the one with real
+  // conversation `<a href="/c/...">` links (gptFindConversationLinks()),
+  // unlike the /projects inline preview, so it's still needed to list and
+  // scrape the project's conversations.
+  const newChatBtn = row.querySelector('button[aria-label="Démarrer un nouveau chat dans le projet"]');
+  if (!newChatBtn) return { navigated: false, name, reason: 'could not find the project-navigation button' };
+  gptFireFullClick(newChatBtn);
 
   return { navigated: true, name };
 }

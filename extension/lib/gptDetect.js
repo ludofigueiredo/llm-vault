@@ -19,7 +19,10 @@ function gptDetectContext(url) {
 
   if (path === '/projects') return { kind: 'projects' };
 
-  const conv = path.match(/^\/g\/(g-p-[a-f0-9]+)-[^/]*\/c\/([a-f0-9-]+)/);
+  // The slug segment after the project id is optional — ChatGPT's project
+  // page UI (circa Oct 2026) links to conversations as plain
+  // /g/g-p-<id>/c/<convId>, dropping the "-<slug>" it used to include.
+  const conv = path.match(/^\/g\/(g-p-[a-f0-9]+)(?:-[^/]*)?\/c\/([a-f0-9-]+)/);
   if (conv) return { kind: 'conversation', projectId: conv[1], convId: conv[2] };
 
   const proj = path.match(/^\/g\/(g-p-[a-f0-9]+)(?:-[^/]*)?\/project/);
