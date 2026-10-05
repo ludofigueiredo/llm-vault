@@ -358,26 +358,39 @@ function gptEnsureSelectionStyle() {
   document.head.appendChild(style);
 }
 
-function gptFindProjectGrid() {
-  return document.querySelector('div[role="grid"][aria-label="Projets"]');
+// ChatGPT's projects-list markup changed (circa Oct 2026): rows are no
+// longer a WAI-ARIA grid (`role="grid"`/`role="row"`/`role="gridcell"`).
+// Each project is now a `[data-project-row-wrapper]` containing one
+// `[data-project-row]` (the clickable header: icon, name, actions) followed
+// by an inline, already-expanded list of the project's own conversations
+// (`[role="list"][aria-label="Chats dans <name>"]` with `[role="listitem"]`
+// rows) — so a selector scoped to just `[data-project-row]` elements is
+// required to avoid also matching conversation rows nested inside.
+function gptFindProjectsContainer() {
+  // There's no single dedicated container element in the new markup (no
+  // role="grid" equivalent) — document is used as the root and all lookups
+  // below scope to [data-project-row] specifically, so this just needs to
+  // exist to gate "are we on a page with a projects list at all".
+  return document.querySelector('[data-project-row]') ? document.body : null;
 }
 
 function gptFindProjectRows() {
-  const grid = gptFindProjectGrid();
-  if (!grid) return [];
-  return [...grid.querySelectorAll('div[role="row"][data-page-table-selectable-row="true"]')];
+  return [...document.querySelectorAll('[data-project-row]')];
 }
 
 function gptRowName(row) {
-  const nameEl = row.querySelector('.text-token-text-primary.truncate');
+  // The project name sits in a plain truncate span next to the
+  // expand/collapse toggle button — distinct from a nested conversation
+  // row's own truncate span, since this lookup is scoped to a
+  // [data-project-row] element, which doesn't contain conversation rows
+  // (those live as siblings inside the wrapper, not inside the row itself).
+  const nameEl = row.querySelector('span.truncate');
   return nameEl ? nameEl.textContent.trim() : '';
 }
 
 function gptHandleSelectionClick(event) {
-  const row = event.target.closest('div[role="row"][data-page-table-selectable-row="true"]');
+  const row = event.target.closest('[data-project-row]');
   if (!row) return;
-  const grid = gptFindProjectGrid();
-  if (!grid || !grid.contains(row)) return;
   event.preventDefault();
   event.stopPropagation();
   const rows = gptFindProjectRows();
@@ -395,12 +408,12 @@ function gptHandleSelectionClick(event) {
 }
 
 function gptStartSelectionMode() {
-  const grid = gptFindProjectGrid();
-  if (!grid) return false;
+  const container = gptFindProjectsContainer();
+  if (!container) return false;
   gptEnsureSelectionStyle();
   gptSelectedProjectsByIndex = new Map();
   gptSelectionClickListener = gptHandleSelectionClick;
-  grid.addEventListener('click', gptSelectionClickListener, true);
+  container.addEventListener('click', gptSelectionClickListener, true);
   return true;
 }
 
@@ -413,9 +426,8 @@ function gptGetSelectedProjects() {
 }
 
 function gptStopSelectionMode() {
-  const grid = gptFindProjectGrid();
-  if (grid && gptSelectionClickListener) {
-    grid.removeEventListener('click', gptSelectionClickListener, true);
+  if (gptSelectionClickListener) {
+    document.body.removeEventListener('click', gptSelectionClickListener, true);
   }
   gptSelectionClickListener = null;
   for (const row of gptFindProjectRows()) row.classList.remove(GPT_SELECTED_CLASS);
@@ -440,41 +452,24 @@ function gptFireFullClick(el) {
   el.dispatchEvent(new MouseEvent('click', opts));
 }
 
-// Fires a real Enter keypress sequence. The row itself carries
-// tabindex="0" + aria-selected (a keyboard-navigable grid row per the WAI-ARIA
-// grid pattern), which means its navigation handler is very likely bound to
-// keydown/keyup on the row rather than (or in addition to) a click on a
-// specific gridcell. Focusing the row and firing Enter mirrors exactly what
-// a keyboard user does, which React's grid implementation must support
-// regardless of how the mouse-click handler is wired.
-function gptFireEnterKey(el) {
-  const opts = { bubbles: true, cancelable: true, view: window, key: 'Enter', code: 'Enter', keyCode: 13, which: 13 };
-  el.dispatchEvent(new KeyboardEvent('keydown', opts));
-  el.dispatchEvent(new KeyboardEvent('keyup', opts));
-}
-
 function gptNavigateProject(index) {
   const rows = gptFindProjectRows();
   const row = rows[index];
   if (!row) return { navigated: false, name: '', reason: `no project row at index ${index}` };
   const name = gptRowName(row);
 
-  // Try the gridcell click first (mouse-style interaction)...
-  const target = row.querySelector('[role="gridcell"]') || row;
-  gptFireFullClick(target);
-
-  // ...then, as a fallback in the same pass, also focus the row and fire a
-  // real Enter keypress. The row is a keyboard-navigable grid row
-  // (tabindex="0" + aria-selected), so its "activate" handler is very
-  // likely bound to keydown, independent of whatever the click handler
-  // does. Firing both maximizes the chance one of them actually triggers
-  // React Router navigation.
-  try {
-    row.focus();
-  } catch (e) {
-    // Row may not be focusable in this state; ignore.
-  }
-  gptFireEnterKey(row);
+  // The new markup (circa Oct 2026) has no ARIA grid/row/gridcell roles and
+  // no tabindex on the row, so neither the old gridcell-click nor the
+  // Enter-keypress fallback has anything reliable to target. The row itself
+  // is also not a single click target: it contains its own expand/collapse
+  // toggle (aria-label="Développer ou réduire le projet") plus pin/new-chat/
+  // menu action buttons, all of which must NOT be clicked (they toggle
+  // inline expansion or open a menu instead of navigating). The project
+  // *name* span is the one element whose only behavior is "open this
+  // project", so it's the click target.
+  const nameEl = row.querySelector('span.truncate');
+  if (!nameEl) return { navigated: false, name, reason: 'could not find project name element to click' };
+  gptFireFullClick(nameEl);
 
   return { navigated: true, name };
 }
