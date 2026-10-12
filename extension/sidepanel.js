@@ -1136,7 +1136,7 @@ async function runGptBatch(selected, tab) {
         debugLog('GPT Batch', `Project "${proj.name}": no conversations found (exported empty)`);
         warnings.push({ name: proj.name, reason: 'no conversations found' });
       }
-      const folderName = gptSanitizeFilename(scraped.project.name || proj.name);
+      const folderName = `${gptSanitizeFilename(scraped.project.name || proj.name)}_${(proj.id || '').slice(-8)}`;
       await gptBuildProjectInto(zip, folderName, scraped.project, scraped.conversations);
       succeeded++;
     } catch (e) {
