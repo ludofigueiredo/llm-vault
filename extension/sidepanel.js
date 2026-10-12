@@ -1065,35 +1065,56 @@ async function confirmGptSelection(tab) {
 // this matters more the later a project sits in the batch, since the SPA
 // has accumulated more state/pending work by then.
 async function gptNavigateToProjectWithRetry(tabId, proj, status, i, total, attempts) {
+  // Collects a one-line reason per attempt (e.g. "attempt 1: button not
+  // found", "attempt 2: URL timeout") so the final failure message — and
+  // the batch summary built from it — says WHICH step broke, instead of
+  // just "failed after N attempts". Each reason is also pushed through
+  // debugLog immediately, so the live console/localStorage trail and the
+  // final on-screen status agree on the same wording.
+  const attemptReasons = [];
+
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const attemptLabel = attempts > 1 ? ` (attempt ${attempt}/${attempts})` : '';
+    const recordFailure = (reason) => {
+      debugLog('GPT Batch', `Project "${proj.name}": ${reason}${attemptLabel}`);
+      attemptReasons.push(`attempt ${attempt}: ${reason}`);
+    };
+
     debugLog('GPT Batch', `Project "${proj.name}": Navigating to projects list${attemptLabel}...`);
     status.textContent = `Project ${i + 1}/${total}: ${proj.name}${attemptLabel}...`;
     await chrome.tabs.update(tabId, { url: 'https://chatgpt.com/projects' });
     const listReady = await waitForContentScriptReady(tabId, 20000, '/projects');
     if (!listReady) {
-      debugLog('GPT Batch', `Project "${proj.name}": projects list page did not load within timeout${attemptLabel}`);
+      recordFailure('projects list page did not load within 20s timeout');
       await sleep(1500 * attempt);
       continue;
     }
 
-    // The list can finish PING-responding before React has hydrated/attached
-    // click handlers to the freshly rendered rows — give it a moment to
-    // settle. Later attempts wait longer, since a page that's still busy
-    // (e.g. the SPA hasn't finished settling from the previous project's
-    // navigation) needs more time, not an immediate retry.
-    await sleep(1200 * attempt);
-
-    debugLog('GPT Batch', `Project "${proj.name}": Clicking project row at index ${proj.index}...`);
+    // The list can finish PING-responding before React has hydrated/rendered
+    // every row — a fixed delay here previously caused "no project row at
+    // index N" on the first attempt (observed live: index 2 requested, only
+    // ~2 rows rendered yet). Poll the actual row count instead of guessing
+    // a delay, so we proceed as soon as enough rows exist (or wait longer,
+    // uncapped by a single fixed sleep, if the page is simply slower this
+    // time) rather than racing a fixed timer against variable render time.
+    const rowCount = await gptWaitForProjectRowCount(tabId, proj.index + 1, 8000 * attempt);
+    debugLog('GPT Batch', `Project "${proj.name}": Clicking project row at index ${proj.index} (${rowCount} row(s) found on page)...`);
     let nav;
     try {
       nav = await chrome.tabs.sendMessage(tabId, { type: 'NAVIGATE_GPT_PROJECT', index: proj.index });
     } catch (e) {
-      debugLog('GPT Batch', `Project "${proj.name}": click message failed: ${e.message}${attemptLabel}`);
+      recordFailure(`click message failed: ${e.message}`);
       continue;
     }
     if (!nav || !nav.navigated) {
-      debugLog('GPT Batch', `Project "${proj.name}": failed to click project at index ${proj.index}${attemptLabel}`);
+      // nav.reason (set by gptNavigateProject in content-gpt.js) says
+      // exactly what went wrong on the page side — e.g. "no project row at
+      // index N" (index out of range, list shorter than expected) or
+      // "could not find the project-navigation button" (ChatGPT changed
+      // that button's aria-label or removed it) — surfacing it here is
+      // what distinguishes those from a generic click failure.
+      const reason = (nav && nav.reason) || 'click reported not navigated (no reason given)';
+      recordFailure(reason);
       continue;
     }
 
@@ -1104,13 +1125,50 @@ async function gptNavigateToProjectWithRetry(tabId, proj, status, i, total, atte
     debugLog('GPT Batch', `Project "${proj.name}": Waiting for project page to load...`);
     const projectUrl = await waitForGptProjectUrl(tabId, 30000);
     if (!projectUrl) {
-      debugLog('GPT Batch', `Project "${proj.name}": project page URL did not appear within 30 seconds${attemptLabel}`);
+      const currentUrl = await gptGetTabUrl(tabId);
+      recordFailure(`project page URL did not appear within 30s timeout (tab is currently at: ${currentUrl || 'unknown'})`);
       continue;
     }
     debugLog('GPT Batch', `Project "${proj.name}": Project URL loaded: ${projectUrl}`);
     return { ok: true, projectUrl };
   }
-  return { ok: false, reason: `navigation to project failed after ${attempts} attempt(s)` };
+  return { ok: false, reason: `navigation failed after ${attempts} attempt(s) — ${attemptReasons.join('; ')}` };
+}
+
+async function gptGetProjectRowCount(tabId) {
+  try {
+    const resp = await chrome.tabs.sendMessage(tabId, { type: 'GET_GPT_PROJECT_ROW_COUNT' });
+    return (resp && typeof resp.count === 'number') ? resp.count : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Polls the page's project row count until it reaches at least minCount
+// (the row the caller is about to click must already exist) or the timeout
+// elapses — whichever first. Always returns the last count observed (or
+// 'n/a' if even the first check failed), so the caller can log it and
+// proceed with a click attempt either way; this function never itself
+// decides the navigation failed, it only waits as long as useful before
+// handing back to the caller.
+async function gptWaitForProjectRowCount(tabId, minCount, timeoutMs) {
+  const start = Date.now();
+  let lastCount = null;
+  while (Date.now() - start < timeoutMs) {
+    lastCount = await gptGetProjectRowCount(tabId);
+    if (lastCount !== null && lastCount >= minCount) return lastCount;
+    await sleep(300);
+  }
+  return lastCount === null ? 'n/a' : lastCount;
+}
+
+async function gptGetTabUrl(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return tab.url || null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function runGptBatch(selected, tab) {

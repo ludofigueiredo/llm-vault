@@ -405,14 +405,32 @@ function gptNavigateProject(index) {
   // not change the URL), and the row's other buttons (pin, "..." menu,
   // expand/collapse toggle) don't navigate either. The one button that does
   // navigate to the dedicated project page (/g/g-p-<id>-<slug>/project) is
-  // "Démarrer un nouveau chat dans le projet" ("start a new chat in this
-  // project") — confirmed live. Navigating there is still required (not to
-  // scrape its DOM anymore — see gptGetProjectConversations, now API-based
-  // — but to read the project id, g-p-<hex>, out of the destination URL via
-  // gptGetProjectIdFromLocation(), since no selectable-mode DOM element on
-  // /projects itself exposes that id).
-  const newChatBtn = row.querySelector('button[aria-label="Démarrer un nouveau chat dans le projet"]');
-  if (!newChatBtn) return { navigated: false, name, reason: 'could not find the project-navigation button' };
+  // the "start a new chat in this project" button — confirmed live.
+  // Navigating there is still required (not to scrape its DOM anymore — see
+  // gptGetProjectConversations, now API-based — but to read the project id,
+  // g-p-<hex>, out of the destination URL via gptGetProjectIdFromLocation(),
+  // since no selectable-mode DOM element on /projects itself exposes that
+  // id). ChatGPT's UI language follows the account/browser locale, so this
+  // button's aria-label isn't always French — both observed labels
+  // ("Démarrer un nouveau chat dans le projet" / "Start new chat in
+  // project") are matched; a locale this doesn't cover will surface as a
+  // "could not find..." error listing every label actually found in the
+  // row (see below), making it easy to add.
+  const newChatBtn = row.querySelector(
+    'button[aria-label="Démarrer un nouveau chat dans le projet"], button[aria-label="Start new chat in project"]'
+  );
+  if (!newChatBtn) {
+    // Surface every button aria-label actually present in this row — lets
+    // the side panel's error log show directly whether ChatGPT renamed/
+    // removed the button (wrong/missing label here) vs. the row having no
+    // buttons at all yet (still rendering).
+    const labels = [...row.querySelectorAll('button[aria-label]')].map((b) => b.getAttribute('aria-label'));
+    return {
+      navigated: false,
+      name,
+      reason: `could not find the project-navigation button (buttons found in row: [${labels.join(', ') || 'none'}])`,
+    };
+  }
   gptFireFullClick(newChatBtn);
 
   return { navigated: true, name };
@@ -451,6 +469,15 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
     }
     if (message && message.type === 'NAVIGATE_GPT_PROJECT') {
       sendResponse(gptNavigateProject(message.index));
+      return false;
+    }
+    if (message && message.type === 'GET_GPT_PROJECT_ROW_COUNT') {
+      // Diagnostic-only: lets the side panel's error log report how many
+      // project rows were actually on the page at the moment a navigation
+      // attempt failed, e.g. "index 2 requested but only 1 row found" (the
+      // selected project disappeared/reordered) vs. "0 rows found" (the
+      // page hadn't finished rendering).
+      sendResponse({ count: gptFindProjectRows().length });
       return false;
     }
     return false;
