@@ -1135,12 +1135,13 @@ async function gptNavigateToProjectWithRetry(tabId, proj, status, i, total, atte
     // dispatched 'click' event) but the project page's own component does
     // not actually mount/render — observed live: the project selected is
     // correct and the URL is right, but nothing renders, while a real
-    // manual click on a project works every time. A real browser
-    // navigation (chrome.tabs.update to the same URL) is a full page load,
-    // not a client-side route change, which is exactly what a manual click
-    // on a real <a>/button element also triggers underneath — forcing one
-    // here reliably gets the page to actually render.
-    await chrome.tabs.update(tabId, { url: projectUrl });
+    // manual click on a project works every time. A chrome.tabs.update to
+    // this same URL is a no-op in Chrome (navigating a tab to the URL it's
+    // already at does not reload it — confirmed live: the page still
+    // didn't render after that "fix"), so chrome.tabs.reload() is used
+    // instead — it forces a real full page load regardless of whether the
+    // URL changed, which is what finally gets the page to render.
+    await chrome.tabs.reload(tabId);
     const projectPageReady = await waitForContentScriptReady(tabId, 20000, new URL(projectUrl).pathname);
     if (!projectPageReady) {
       recordFailure('project page did not finish loading after forced reload');

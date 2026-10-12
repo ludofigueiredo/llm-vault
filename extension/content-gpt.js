@@ -413,24 +413,6 @@ function gptStopSelectionMode() {
   gptSelectedProjectsByIndex = new Map();
 }
 
-// A plain el.click() doesn't always trigger React Router navigation on
-// ChatGPT's project rows — React's synthetic event system expects a fuller
-// pointer/mouse event sequence (pointerdown → mousedown → mouseup → click),
-// each bubbling with isTrusted-like properties. Dispatching just 'click'
-// works most of the time but is flaky under load; firing the whole sequence
-// makes the click far more reliable.
-function gptFireFullClick(el) {
-  const rect = el.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
-  el.dispatchEvent(new PointerEvent('pointerdown', opts));
-  el.dispatchEvent(new MouseEvent('mousedown', opts));
-  el.dispatchEvent(new PointerEvent('pointerup', opts));
-  el.dispatchEvent(new MouseEvent('mouseup', opts));
-  el.dispatchEvent(new MouseEvent('click', opts));
-}
-
 function gptNavigateProject(index) {
   const rows = gptFindProjectRows();
   const row = rows[index];
@@ -455,7 +437,17 @@ function gptNavigateProject(index) {
       reason: `could not find the project-navigation button (buttons found in row: [${labels.join(', ') || 'none'}])`,
     };
   }
-  gptFireFullClick(newChatBtn);
+  // A plain native .click() is deliberate here, not a dispatched event
+  // sequence: an earlier version of this extension used exactly this and
+  // navigation worked reliably; a later attempt at a "fuller"
+  // pointerdown/mousedown/pointerup/mouseup/click dispatch sequence (meant
+  // to be more robust) instead made navigation intermittent — sometimes it
+  // worked, sometimes nothing happened at all (confirmed live, 3/3 retry
+  // attempts all failing to even change the URL). A native .click() fires
+  // the browser's own real event sequence in one atomic call, which
+  // apparently plays more consistently with however this page's React
+  // event handlers are wired than manually dispatched events do.
+  newChatBtn.click();
 
   return { navigated: true, name };
 }
