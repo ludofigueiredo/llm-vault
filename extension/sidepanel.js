@@ -624,7 +624,7 @@ async function startRecentsExport(conversationsSelected) {
 
     setStatus(`Building zip for ${conversations.length} conversation(s)...`, '');
     const blob = await buildConversationsSelectionZip(conversations, artifactsDataByUuid);
-    const downloadFilename = `conversations_selection_${conversations.length}.zip`;
+    const downloadFilename = `claude_conversations_selection_${conversations.length}.zip`;
 
     const url = URL.createObjectURL(blob);
     chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
@@ -764,7 +764,7 @@ async function startBatchExport(projects) {
 
     setStatus(`Building combined zip for ${succeeded.length} project(s)...`, '');
     const blob = await zip.generateAsync({ type: 'blob' });
-    const downloadFilename = `projects_batch_${succeeded.length}.zip`;
+    const downloadFilename = `claude_projects_batch_${succeeded.length}.zip`;
 
     const url = URL.createObjectURL(blob);
     chrome.downloads.download({ url, filename: downloadFilename, saveAs: false }, () => {
@@ -884,7 +884,7 @@ async function runExport() {
       const projectZip = new JSZip();
       await buildProjectZip(projectZip, '', projectId, conversations, projectMetadata, artifactsDataByUuid);
       blob = await projectZip.generateAsync({ type: 'blob' });
-      downloadFilename = `project_${projectId.substring(0, 8)}.zip`;
+      downloadFilename = `claude_project_${projectId.substring(0, 8)}.zip`;
 
       let projectStatusMessage;
       if (conversations.length < conversationsList.length) {
@@ -930,7 +930,7 @@ async function runExport() {
 
       setStatus('Building zip...', '');
       blob = await buildConversationZip(conversation, artifactsData);
-      downloadFilename = `${conversationFolderName(conversation)}.zip`;
+      downloadFilename = `claude_${conversationFolderName(conversation)}.zip`;
 
       let conversationStatusMessage = '✅ Exported conversation.';
       if (contentScriptUnreachable) {
