@@ -138,8 +138,17 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
         continue;
       }
       const data = await gptSendMessageWithRetry(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId }, 1, 800);
+      // Prefer the API's own title over the one scraped from the project
+      // page's DOM when available: the DOM scrape (gptScrapeConversationList
+      // in content-gpt.js) falls back to the raw convId when its selector
+      // doesn't match a given row (observed live — some rows render without
+      // the expected title element), which otherwise ends up as the
+      // zip folder name via gptConvFolderName(). The API's conversation/
+      // <convId> response always has the real title.
+      const apiTitle = (data && data.title || '').trim();
       result.conversations.push({
         ...conv,
+        title: apiTitle || conv.title,
         turns: (data && data.turns) || [],
         files: (data && data.files) || [],
       });
