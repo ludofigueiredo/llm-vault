@@ -95,7 +95,7 @@ function createIndexMarkdown(projectId, conversations) {
 
   sorted.forEach((conv, index) => {
     const folderName = conversationFolderName(conv);
-    markdown += `${index + 1}. [${conv.metadata.name}](./Conversations/${folderName}/conversation.md)\n`;
+    markdown += `${index + 1}. [${conv.metadata.name}](./conversations/${folderName}/conversation.md)\n`;
     markdown += `   - Created: ${new Date(conv.metadata.created_at).toLocaleDateString()}\n`;
     markdown += `   - Updated: ${new Date(conv.metadata.updated_at).toLocaleDateString()}\n`;
     markdown += `   - Model: ${conv.metadata.model}\n\n`;

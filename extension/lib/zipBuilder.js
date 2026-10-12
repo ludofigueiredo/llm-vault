@@ -44,7 +44,7 @@ async function buildProjectZip(zip, folderPath, projectId, conversations, projec
   const projectFiles = (projectMetadata && projectMetadata.files) || [];
   await fetchFilesInto(fichiersFolder, projectFiles);
 
-  const conversationsFolder = target.folder('Conversations');
+  const conversationsFolder = target.folder('conversations');
   for (const conv of conversations) {
     const folderName = conversationFolderName(conv);
     const artifactsData = (artifactsDataByUuid && artifactsDataByUuid.get(conv.metadata.uuid)) || { artifactFiles: [], contentFiles: [] };

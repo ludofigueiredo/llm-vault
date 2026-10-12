@@ -36,7 +36,7 @@ function gptIndexMarkdown(project, conversations) {
   const lines = [`# ${project.name || 'Projet'}`, '', '## Conversations', ''];
   for (const conv of conversations) {
     const folder = gptConvFolderName(conv);
-    lines.push(`- [${conv.title || 'sans-titre'}](Conversations/${folder}/conversation.md)`);
+    lines.push(`- [${conv.title || 'sans-titre'}](conversations/${folder}/conversation.md)`);
   }
   lines.push('');
   const sourceFiles = project.sourceFiles || [];
