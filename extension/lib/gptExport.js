@@ -55,13 +55,14 @@ async function gptSendMessageWithRetry(tabId, message, retries, delayMs) {
 }
 
 async function gptScrapeProject(tabId, projectUrl, onProgress) {
-  // 1. Navigate to the project page and wait for the content script.
-  await chrome.tabs.update(tabId, { url: projectUrl });
-  const projectPath = new URL(projectUrl).pathname;
-  const ready = await waitForContentScriptReady(tabId, 20000, projectPath);
-  if (!ready) throw new Error('project page did not load in time (content script not ready)');
+  // The tab is already on projectUrl and its content script already
+  // confirmed ready by the caller (gptNavigateToProjectWithRetry in
+  // sidepanel.js, which forces a full page reload there — a synthetic
+  // click's React-Router-only URL change doesn't reliably mount the
+  // project page's own component, confirmed live) — no need to navigate
+  // again here.
 
-  // 2. Instructions + conversation list.
+  // 1. Instructions + conversation list.
   let project;
   try {
     project = await sendMessageWithRecovery(tabId, { type: 'GET_GPT_PROJECT_METADATA' }, 'content-gpt.js');

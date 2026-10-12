@@ -1129,7 +1129,24 @@ async function gptNavigateToProjectWithRetry(tabId, proj, status, i, total, atte
       recordFailure(`project page URL did not appear within 30s timeout (tab is currently at: ${currentUrl || 'unknown'})`);
       continue;
     }
-    debugLog('GPT Batch', `Project "${proj.name}": Project URL loaded: ${projectUrl}`);
+    debugLog('GPT Batch', `Project "${proj.name}": Project URL loaded (via React route change): ${projectUrl}`);
+
+    // The synthetic click changes the URL (React Router reacts to the
+    // dispatched 'click' event) but the project page's own component does
+    // not actually mount/render — observed live: the project selected is
+    // correct and the URL is right, but nothing renders, while a real
+    // manual click on a project works every time. A real browser
+    // navigation (chrome.tabs.update to the same URL) is a full page load,
+    // not a client-side route change, which is exactly what a manual click
+    // on a real <a>/button element also triggers underneath — forcing one
+    // here reliably gets the page to actually render.
+    await chrome.tabs.update(tabId, { url: projectUrl });
+    const projectPageReady = await waitForContentScriptReady(tabId, 20000, new URL(projectUrl).pathname);
+    if (!projectPageReady) {
+      recordFailure('project page did not finish loading after forced reload');
+      continue;
+    }
+    debugLog('GPT Batch', `Project "${proj.name}": Project page reloaded and ready: ${projectUrl}`);
     return { ok: true, projectUrl };
   }
   return { ok: false, reason: `navigation failed after ${attempts} attempt(s) — ${attemptReasons.join('; ')}` };
