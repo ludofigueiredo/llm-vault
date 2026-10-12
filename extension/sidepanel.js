@@ -1260,6 +1260,14 @@ async function runGptBatch(selected, tab) {
 
 // After NAVIGATE_GPT_PROJECT, the React app changes the tab URL to the
 // project page. Poll the tab URL until it matches /g/g-p-.../project.
+// Observed live: the URL can land on /g/g-p-<id>/project and then bounce
+// straight back to /projects within well under a second (the user saw this
+// happen visibly) — a 300ms poll interval can miss that window entirely,
+// which previously surfaced as a false "project page URL did not appear"
+// failure (triggering gptNavigateToProjectWithRetry's own re-navigation
+// back to /projects, compounding the problem). 100ms narrows that gap
+// significantly without meaningfully increasing CPU/battery cost over the
+// short lifetime of this poll.
 function waitForGptProjectUrl(tabId, timeoutMs) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -1287,7 +1295,7 @@ function waitForGptProjectUrl(tabId, timeoutMs) {
         resolve(null);
         return;
       }
-      setTimeout(poll, 300);
+      setTimeout(poll, 100);
     };
     poll();
   });

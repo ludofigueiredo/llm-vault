@@ -1,11 +1,15 @@
 // GPT content script — injected on chatgpt.com. Fully independent of the
-// Claude content.js. Uses DOM scraping only for multi-project selection on
-// /projects (no API exposes that listing) and to discover a selected
-// project's id by navigating to its project page. Project metadata, a
-// project's conversation list, and conversation content/files are all
-// fetched from ChatGPT's internal /backend-api, called from this content
-// script running in the page's own origin (so session cookies/token apply
-// automatically, no separate auth needed).
+// Claude content.js. Uses DOM scraping for: multi-project selection on
+// /projects (no API exposes that listing), navigating to a selected
+// project's page, and that page's own conversation list (its "Chats" tab)
+// — the user wants the project page to actually render and its
+// conversations highlighted/visited one by one, rather than everything
+// resolved invisibly through an API call. Project metadata (name/
+// instructions) still comes from the gizmos API (never fragile, no reason
+// to revert), and conversation content/files are fetched from ChatGPT's
+// internal /backend-api, called from this content script running in the
+// page's own origin (so session cookies/token apply automatically, no
+// separate auth needed).
 
 function gptStripCitations(str) {
   return str.replace(/【[^】]*】/g, '');
@@ -174,39 +178,74 @@ async function gptGetProjectMetadata() {
   }
 }
 
-// Project's conversation list via the gizmos API, replacing the previous
-// DOM-scrape (auto-scroll + stabilize + parse <a href> links) — that relied
-// on the project page rendering every conversation as a real link, which
-// broke once already (slug segment dropped from the href). The API gives
-// {id, title} directly with no DOM/rendering dependency at all, and pages
-// via `cursor` instead of scrolling.
-async function gptGetProjectConversationsViaApi(projectId) {
-  const token = await gptGetSessionToken();
+// Conversation rows on a project page's "Chats" tab carry a real href:
+// /g/g-p-<id>/c/<convId> (confirmed live — no "-<slug>" segment on this
+// page, unlike some other ChatGPT conversation links elsewhere, so the
+// slug is optional here to tolerate either shape).
+function gptFindConversationLinks() {
+  return [...document.querySelectorAll('a[href*="/c/"]')].filter((a) =>
+    /\/g\/g-p-[a-f0-9]+(?:-[^/]*)?\/c\/[a-f0-9-]+/.test(a.getAttribute('href') || '')
+  );
+}
+
+// Visual confirmation, mirroring the gold/amber selection highlight used
+// elsewhere: outlines every conversation row found on the project page so
+// a user watching the tab can see the extension found the right list
+// before it starts visiting each one.
+function gptHighlightConversationRows() {
+  gptEnsureSelectionStyle();
+  const links = gptFindConversationLinks();
+  for (const a of links) a.classList.add(GPT_SELECTED_CLASS);
+  return links.length;
+}
+
+function gptScrapeConversationList() {
+  const seen = new Set();
   const conversations = [];
-  let cursor = null;
-  do {
-    const query = `limit=50&owned_only=false${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
-    const resp = await gptApiGet(`gizmos/${projectId}/conversations?${query}`, token);
-    const items = (resp && resp.items) || [];
-    for (const item of items) {
-      if (!item || !item.id) continue;
-      conversations.push({
-        title: item.title || item.id,
-        convId: item.id,
-        url: `${window.location.origin}/g/${projectId}/c/${item.id}`,
-      });
-    }
-    cursor = (resp && resp.cursor) || null;
-  } while (cursor);
+  for (const a of gptFindConversationLinks()) {
+    const href = a.getAttribute('href');
+    const m = href.match(/\/c\/([a-f0-9-]+)/);
+    if (!m) continue;
+    const convId = m[1];
+    if (seen.has(convId)) continue;
+    seen.add(convId);
+    const titleEl = a.querySelector('.text-sm.font-medium');
+    const title = (titleEl && titleEl.textContent.trim()) || convId;
+    const url = new URL(href, window.location.origin).href;
+    conversations.push({ title, convId, url });
+  }
   return conversations;
 }
 
-async function gptGetProjectConversations() {
-  const projectId = gptGetProjectIdFromLocation();
-  if (!projectId) return { conversations: [] };
-  const conversations = await gptGetProjectConversationsViaApi(projectId);
-  return { conversations };
+// The project page can still be rendering its chat list a moment after
+// GET_GPT_PROJECT_CONVERSATIONS is sent (e.g. just after navigation) — poll
+// the link count until it stops growing (3 consecutive stable checks) or a
+// timeout elapses, mirroring the stabilization pattern used by Claude's
+// Recents "Select All" and ChatGPT's own earlier conversation-list scrape.
+function gptWaitForListToStabilize(timeoutMs, stableChecksRequired, intervalMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    let lastCount = -1;
+    let stableChecks = 0;
+    const poll = () => {
+      const count = gptFindConversationLinks().length;
+      if (count === lastCount) { stableChecks++; }
+      else { stableChecks = 0; lastCount = count; }
+      if (stableChecks >= stableChecksRequired || Date.now() - start >= timeoutMs) {
+        resolve(count); return;
+      }
+      setTimeout(poll, intervalMs);
+    };
+    poll();
+  });
 }
+
+async function gptGetProjectConversations() {
+  await gptWaitForListToStabilize(15000, 3, 500);
+  gptHighlightConversationRows();
+  return { conversations: gptScrapeConversationList() };
+}
+
 
 const GPT_MIME_TO_EXT = {
   'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
@@ -398,32 +437,17 @@ function gptNavigateProject(index) {
   if (!row) return { navigated: false, name: '', reason: `no project row at index ${index}` };
   const name = gptRowName(row);
 
-  // The new markup (circa Oct 2026) has no ARIA grid/row/gridcell roles and
-  // no tabindex on the row, and the row itself is no longer a navigation
-  // target at all: clicking the project name only toggles the row's own
-  // inline-expanded conversation preview in place (confirmed live — it does
-  // not change the URL), and the row's other buttons (pin, "..." menu,
-  // expand/collapse toggle) don't navigate either. The one button that does
-  // navigate to the dedicated project page (/g/g-p-<id>-<slug>/project) is
-  // the "start a new chat in this project" button — confirmed live.
-  // Navigating there is still required (not to scrape its DOM anymore — see
-  // gptGetProjectConversations, now API-based — but to read the project id,
-  // g-p-<hex>, out of the destination URL via gptGetProjectIdFromLocation(),
-  // since no selectable-mode DOM element on /projects itself exposes that
-  // id). ChatGPT's UI language follows the account/browser locale, so this
-  // button's aria-label isn't always French — both observed labels
-  // ("Démarrer un nouveau chat dans le projet" / "Start new chat in
-  // project") are matched; a locale this doesn't cover will surface as a
-  // "could not find..." error listing every label actually found in the
-  // row (see below), making it easy to add.
+  // The "start a new chat in project" button is the row's actual
+  // navigation target to the dedicated project page
+  // (/g/g-p-<id>(-<slug>)?/project) — confirmed live. ChatGPT's UI language
+  // follows the account/browser locale, so this button's aria-label isn't
+  // always French; both observed labels are matched. A locale this doesn't
+  // cover surfaces as a "could not find..." error listing every button
+  // label actually found in the row, making it easy to add.
   const newChatBtn = row.querySelector(
     'button[aria-label="Démarrer un nouveau chat dans le projet"], button[aria-label="Start new chat in project"]'
   );
   if (!newChatBtn) {
-    // Surface every button aria-label actually present in this row — lets
-    // the side panel's error log show directly whether ChatGPT renamed/
-    // removed the button (wrong/missing label here) vs. the row having no
-    // buttons at all yet (still rendering).
     const labels = [...row.querySelectorAll('button[aria-label]')].map((b) => b.getAttribute('aria-label'));
     return {
       navigated: false,

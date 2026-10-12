@@ -90,21 +90,25 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
 
   console.log(`[gptScrapeProject] Found ${conversations.length} conversations to scrape`);
 
-  // 3. Fetch each conversation's content via /backend-api/conversation/<id>.
-  // This is a same-origin fetch keyed purely by convId — it does not read
-  // anything from a specific conversation page's DOM, so there is no need
-  // to navigate the tab to each conversation's URL first. We stay on the
-  // project page (still the active tab from step 1/2) for every fetch,
-  // which removes an entire chrome.tabs.update + waitForContentScriptReady
-  // cycle per conversation — previously the single largest source of
-  // navigation-timing flakiness in a project export (a click landing wrong,
-  // a page taking >15s to report ready, a message channel torn down by a
-  // navigation racing the request).
+  // 3. Visit each conversation's own page, then fetch its content via
+  // /backend-api/conversation/<id> once there. The API call itself doesn't
+  // need the tab to be on that conversation's page (it's a same-origin
+  // fetch keyed purely by convId) — but navigating there anyway is
+  // deliberate: the user wants to see each conversation actually open and
+  // be scraped one by one, not have everything resolved invisibly from the
+  // project page.
   const result = { project, conversations: [] };
   for (let i = 0; i < conversations.length; i++) {
     const conv = conversations[i];
     if (onProgress) onProgress(i + 1, conversations.length, conv.title);
     try {
+      await chrome.tabs.update(tabId, { url: conv.url });
+      const convReady = await waitForContentScriptReady(tabId, 15000, `/c/${conv.convId}`);
+      if (!convReady) {
+        console.warn(`[gptScrapeProject] Conversation "${conv.title}": page did not load in time, skipping content`);
+        result.conversations.push({ ...conv, turns: [], files: [] });
+        continue;
+      }
       const data = await gptSendMessageWithRetry(tabId, { type: 'GET_GPT_CONVERSATION_VIA_API', convId: conv.convId }, 1, 800);
       result.conversations.push({
         ...conv,
