@@ -33,6 +33,7 @@ const idx = gptIndexMarkdown(
 );
 assert.ok(idx.includes('Avis CV'));
 assert.ok(idx.includes('692955e1'));
+assert.ok(idx.includes('(Conversations/'), 'conversation link points into Conversations/');
 
 // index with no sources: no "## Sources" section at all
 assert.ok(!idx.includes('## Sources'), 'no Sources section when sourceFiles is absent/empty');

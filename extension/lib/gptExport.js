@@ -40,8 +40,9 @@ async function gptBuildProjectInto(zip, folderPath, project, conversationsWithDa
       }
     }
   }
+  const conversationsFolder = target.folder('Conversations');
   for (const conv of conversationsWithData) {
-    await gptBuildConversationFolder(target, conv);
+    await gptBuildConversationFolder(conversationsFolder, conv);
   }
 }
 
