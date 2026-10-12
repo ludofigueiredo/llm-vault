@@ -30,7 +30,7 @@ async function gptBuildProjectInto(zip, folderPath, project, conversationsWithDa
   }
   const sourceFiles = project.sourceFiles || [];
   if (sourceFiles.length > 0) {
-    const sources = target.folder('sources-gpt');
+    const sources = target.folder('fichiers');
     for (const f of sourceFiles) {
       try {
         sources.file(f.filename, gptBase64ToBytes(f.bytesBase64));

@@ -43,8 +43,8 @@ const idxWithSources = gptIndexMarkdown(
   []
 );
 assert.ok(idxWithSources.includes('## Sources'));
-assert.ok(idxWithSources.includes('[20MB-TESTFILE.ORG.pdf](sources-gpt/20MB-TESTFILE.ORG.pdf)'));
-assert.ok(idxWithSources.includes('[Logo_Reims_University.png](sources-gpt/Logo_Reims_University.png)'));
+assert.ok(idxWithSources.includes('[20MB-TESTFILE.ORG.pdf](fichiers/20MB-TESTFILE.ORG.pdf)'));
+assert.ok(idxWithSources.includes('[Logo_Reims_University.png](fichiers/Logo_Reims_University.png)'));
 
 // folder name
 assert.strictEqual(

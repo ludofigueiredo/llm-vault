@@ -43,7 +43,7 @@ function gptIndexMarkdown(project, conversations) {
   if (sourceFiles.length > 0) {
     lines.push('## Sources', '');
     for (const f of sourceFiles) {
-      lines.push(`- [${f.filename}](sources-gpt/${f.filename})`);
+      lines.push(`- [${f.filename}](fichiers/${f.filename})`);
     }
     lines.push('');
   }
