@@ -173,6 +173,30 @@
     #status.error { color: var(--error); }
     #status.success { color: var(--success); }
     #status.warning { color: #B8874B; }
+
+    /* Spinner shown next to the status text while an export/batch is in
+       progress, so a long-running step (e.g. "Project 1/1: CV 2026...")
+       doesn't look like the extension has stalled. */
+    #status.loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #status.loading::before {
+      content: '';
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      border: 2px solid var(--border);
+      border-top-color: var(--confirm-accent);
+      border-radius: 50%;
+      animation: llmvault-spin 0.7s linear infinite;
+    }
+
+    @keyframes llmvault-spin {
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>

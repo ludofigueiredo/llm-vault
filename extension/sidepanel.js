@@ -298,7 +298,10 @@ async function detectContext() {
 function setStatus(message, kind) {
   const status = document.getElementById('status');
   status.textContent = message;
-  status.className = kind || '';
+  // No explicit kind ('error'/'success'/'warning') means an in-progress
+  // step, not a final result — show the spinner so a long-running batch
+  // step doesn't read as the extension having stalled.
+  status.className = kind || 'loading';
 }
 
 async function gotoSite(url) {
@@ -964,7 +967,7 @@ async function startGptProjectExport(url, tab) {
   const status = document.getElementById('status');
   exportBtn.disabled = true;
   batchInProgress = true;
-  status.className = '';
+  status.className = 'loading';
   status.textContent = 'Scraping GPT project...';
   try {
     debugLog('GPT Export', `Starting project export from URL: ${url}`);
@@ -1089,7 +1092,7 @@ async function runGptBatch(selected, tab) {
   const confirmBtn = document.getElementById('confirm-selection-btn');
   confirmBtn.style.display = 'none';
   batchInProgress = true;
-  status.className = '';
+  status.className = 'loading';
   const zip = new JSZip();
   const failed = [];
   const warnings = [];
