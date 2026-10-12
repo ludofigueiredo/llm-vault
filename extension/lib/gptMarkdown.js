@@ -39,6 +39,14 @@ function gptIndexMarkdown(project, conversations) {
     lines.push(`- [${conv.title || 'sans-titre'}](${folder}/conversation.md)`);
   }
   lines.push('');
+  const sourceFiles = project.sourceFiles || [];
+  if (sourceFiles.length > 0) {
+    lines.push('## Sources', '');
+    for (const f of sourceFiles) {
+      lines.push(`- [${f.filename}](sources-gpt/${f.filename})`);
+    }
+    lines.push('');
+  }
   return lines.join('\n');
 }
 

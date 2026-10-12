@@ -156,14 +156,19 @@ async function gptApiGet(path, token) {
   return resp.json();
 }
 
-// Project metadata (name + instructions) via the gizmos API, replacing the
-// previous DOM-scrape that opened the project's details dialog to read
-// input#project-name/textarea#instructions — that dialog flow was fragile
-// (multi-step click sequence, 5s timeouts at each step) and the UI it
-// depends on can change independently of this data actually being
-// available directly from /backend-api/gizmos/<projectId>.
+// Project metadata (name + instructions + the project's "Sources" file
+// list) via the gizmos API, replacing the previous DOM-scrape that opened
+// the project's details dialog to read input#project-name/
+// textarea#instructions — that dialog flow was fragile (multi-step click
+// sequence, 5s timeouts at each step) and the UI it depends on can change
+// independently of this data actually being available directly from
+// /backend-api/gizmos/<projectId>. The same response's top-level `files`
+// array (not nested under `gizmo`) is each Sources-tab file's
+// {file_id, name, ...} — language-independent, unlike scraping the
+// Sources tab's own DOM, and it's already being fetched here for the
+// name/instructions, so reading it too costs nothing extra.
 async function gptGetProjectMetadata() {
-  const fallback = { name: gptGetProjectTitle(), instructions: '' };
+  const fallback = { name: gptGetProjectTitle(), instructions: '', sources: [] };
   const projectId = gptGetProjectIdFromLocation();
   if (!projectId) return fallback;
 
@@ -172,13 +177,44 @@ async function gptGetProjectMetadata() {
     const resp = await gptApiGet(`gizmos/${projectId}?include_file_limits=true`, token);
     const gizmo = resp && resp.gizmo;
     if (!gizmo) return fallback;
+    const sources = ((resp && resp.files) || [])
+      .filter((f) => f && f.file_id)
+      .map((f) => ({ fileId: f.file_id, name: f.name || f.file_id }));
     return {
       name: (gizmo.display && gizmo.display.name) || fallback.name,
       instructions: (gizmo.instructions || '').trim(),
+      sources,
     };
   } catch (e) {
     return fallback;
   }
+}
+
+// Downloads every file listed in the project's "Sources" tab, via the same
+// /backend-api/files/download/<fileId> endpoint used for conversation
+// attachments (gptDownloadFile) — download_intent=true&gizmo_id=<projectId>
+// is appended since that's confirmed (via a live test against this user's
+// own project) to be what the download link request actually needs for a
+// project-level source, as opposed to a conversation attachment.
+async function gptDownloadProjectSources(projectId, sources) {
+  if (!sources || sources.length === 0) return [];
+  const token = await gptGetSessionToken();
+  const usedNames = new Set();
+  const files = [];
+  for (const source of sources) {
+    try {
+      const dl = await gptDownloadFile(
+        source.fileId, source.name, token, usedNames,
+        `download_intent=true&gizmo_id=${encodeURIComponent(projectId)}`
+      );
+      files.push(dl);
+      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      // Skip this source; keep going — same tolerance as conversation
+      // attachment downloads (gptGetConversationViaApi).
+    }
+  }
+  return files;
 }
 
 // Conversation rows on a project page's "Chats" tab carry a real href:
@@ -280,8 +316,8 @@ function gptBytesToBase64(bytes) {
   return btoa(binary);
 }
 
-async function gptDownloadFile(fileId, fallbackName, token, usedNames) {
-  const meta = await gptApiGet(`files/download/${fileId}`, token);
+async function gptDownloadFile(fileId, fallbackName, token, usedNames, extraQuery) {
+  const meta = await gptApiGet(`files/download/${fileId}${extraQuery ? `?${extraQuery}` : ''}`, token);
   if (!meta || !meta.download_url) throw new Error('no download_url');
   const resp = await fetch(meta.download_url, { credentials: 'include' });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -482,6 +518,16 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
     }
     if (message && message.type === 'GET_GPT_PROJECT_METADATA') {
       gptGetProjectMetadata().then(sendResponse);
+      return true;
+    }
+    if (message && message.type === 'DOWNLOAD_GPT_PROJECT_SOURCES') {
+      // projectId comes from the current page's own URL, not the message —
+      // the caller already navigated here for GET_GPT_PROJECT_METADATA, so
+      // this content script is already on the right project's page.
+      const projectId = gptGetProjectIdFromLocation();
+      gptDownloadProjectSources(projectId, message.sources)
+        .then((files) => sendResponse({ files }))
+        .catch(() => sendResponse({ files: [] }));
       return true;
     }
     if (message && message.type === 'GET_GPT_PROJECT_CONVERSATIONS') {

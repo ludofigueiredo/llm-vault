@@ -34,6 +34,18 @@ const idx = gptIndexMarkdown(
 assert.ok(idx.includes('Avis CV'));
 assert.ok(idx.includes('692955e1'));
 
+// index with no sources: no "## Sources" section at all
+assert.ok(!idx.includes('## Sources'), 'no Sources section when sourceFiles is absent/empty');
+
+// index with project sources
+const idxWithSources = gptIndexMarkdown(
+  { name: 'CV 2026', sourceFiles: [{ filename: '20MB-TESTFILE.ORG.pdf' }, { filename: 'Logo_Reims_University.png' }] },
+  []
+);
+assert.ok(idxWithSources.includes('## Sources'));
+assert.ok(idxWithSources.includes('[20MB-TESTFILE.ORG.pdf](sources-gpt/20MB-TESTFILE.ORG.pdf)'));
+assert.ok(idxWithSources.includes('[Logo_Reims_University.png](sources-gpt/Logo_Reims_University.png)'));
+
 // folder name
 assert.strictEqual(
   gptConvFolderName({ title: 'Avis: CV/2026', convId: '692955e1-3d78-8325-b019-7a4326ada801' }),

@@ -28,6 +28,18 @@ async function gptBuildProjectInto(zip, folderPath, project, conversationsWithDa
   if (project.instructions) {
     target.file('instructions.md', gptInstructionsMarkdown(project));
   }
+  const sourceFiles = project.sourceFiles || [];
+  if (sourceFiles.length > 0) {
+    const sources = target.folder('sources-gpt');
+    for (const f of sourceFiles) {
+      try {
+        sources.file(f.filename, gptBase64ToBytes(f.bytesBase64));
+      } catch (e) {
+        // Skip a corrupt entry; keep going — same tolerance as
+        // gptBuildConversationFolder's own file-writing loop.
+      }
+    }
+  }
   for (const conv of conversationsWithData) {
     await gptBuildConversationFolder(target, conv);
   }
@@ -66,6 +78,23 @@ async function gptScrapeProject(tabId, projectUrl, onProgress) {
     project = await sendMessageWithRecovery(tabId, { type: 'GET_GPT_PROJECT_METADATA' }, 'content-gpt.js');
   } catch (e) {
     throw new Error(`failed to fetch project metadata: ${e.message}`);
+  }
+
+  // 1.5. The project's "Sources" tab files (project.sources, from the same
+  // gizmos API response GET_GPT_PROJECT_METADATA already fetched) — done
+  // here, still on the project page, before navigating away to the first
+  // conversation. A project with no sources (project.sources is an empty
+  // array) skips this with no extra request.
+  project.sourceFiles = [];
+  if (project.sources && project.sources.length > 0) {
+    try {
+      const sourcesResp = await gptSendMessageWithRetry(
+        tabId, { type: 'DOWNLOAD_GPT_PROJECT_SOURCES', sources: project.sources }, 1, 800
+      );
+      project.sourceFiles = (sourcesResp && sourcesResp.files) || [];
+    } catch (e) {
+      console.warn(`[gptScrapeProject] Failed to download project sources: ${e.message}`);
+    }
   }
 
   let listResp;
