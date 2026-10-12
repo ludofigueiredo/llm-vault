@@ -56,11 +56,9 @@ async function gptSendMessageWithRetry(tabId, message, retries, delayMs) {
 
 async function gptScrapeProject(tabId, projectUrl, onProgress) {
   // The tab is already on projectUrl and its content script already
-  // confirmed ready by the caller (gptNavigateToProjectWithRetry in
-  // sidepanel.js, which forces a full page reload there — a synthetic
-  // click's React-Router-only URL change doesn't reliably mount the
-  // project page's own component, confirmed live) — no need to navigate
-  // again here.
+  // confirmed ready by the caller (either gptNavigateToProject in
+  // sidepanel.js, for a batch, or the user having manually navigated there
+  // for a single-project export) — no need to navigate again here.
 
   // 1. Instructions + conversation list.
   let project;

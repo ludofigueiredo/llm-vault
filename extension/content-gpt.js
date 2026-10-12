@@ -1,15 +1,17 @@
 // GPT content script — injected on chatgpt.com. Fully independent of the
 // Claude content.js. Uses DOM scraping for: multi-project selection on
-// /projects (no API exposes that listing), navigating to a selected
-// project's page, and that page's own conversation list (its "Chats" tab)
-// — the user wants the project page to actually render and its
-// conversations highlighted/visited one by one, rather than everything
-// resolved invisibly through an API call. Project metadata (name/
-// instructions) still comes from the gizmos API (never fragile, no reason
-// to revert), and conversation content/files are fetched from ChatGPT's
-// internal /backend-api, called from this content script running in the
-// page's own origin (so session cookies/token apply automatically, no
-// separate auth needed).
+// /projects (no API exposes that listing's row click targets, though the
+// listing itself — including every project's real id — is available via
+// gptGetAllProjectIds() below) and the project page's own conversation list
+// (its "Chats" tab) — the user wants the project page to actually render
+// and its conversations highlighted/visited one by one, rather than
+// everything resolved invisibly through an API call. Project metadata
+// (name/instructions) comes from the gizmos API (never fragile, no reason
+// to DOM-scrape it), and conversation content/files are fetched from
+// ChatGPT's internal /backend-api, called from this content script running
+// in the page's own origin (so session cookies/token apply automatically,
+// no separate auth needed). Navigating TO a selected project is now a
+// plain URL navigation (see gptGetAllProjectIds), not a click on anything.
 
 function gptStripCitations(str) {
   return str.replace(/【[^】]*】/g, '');
@@ -114,9 +116,10 @@ function gptGetProjectTitle() {
 }
 
 // Extracts the g-p-<hex> project id from the current page's own URL — used
-// once we're already on a project page (after gptNavigateProject) to call
-// the gizmos API for that project, without needing a second DOM scrape.
-// Mirrors gptDetectContext's 'project' pattern in gptDetect.js.
+// once already on a project page (sidepanel.js navigates there directly by
+// URL — see gptGetAllProjectIds) to call the gizmos API for that project,
+// without needing a second DOM scrape. Mirrors gptDetectContext's
+// 'project' pattern in gptDetect.js.
 function gptGetProjectIdFromLocation() {
   const m = window.location.pathname.match(/^\/g\/(g-p-[a-f0-9]+)(?:-[^/]*)?\/(?:project|c)\b/);
   return m ? m[1] : null;
@@ -315,6 +318,39 @@ async function gptGetConversationViaApi(convId) {
   return { title: convo.title || '', createTime: convo.create_time || null, turns, files };
 }
 
+// Lists every one of the user's projects with its real g-p-<hex> id, via
+// the same internal endpoint ChatGPT's own sidebar uses to render its
+// project list. This replaces the previous approach entirely: there was
+// no way to read a project's id from the /projects page's own DOM (no
+// element exposes it), so navigating to a selected project required
+// clicking a button on its row and either hoping the resulting client-side
+// route change rendered the page, or forcing a reload once it didn't —
+// both confirmed live to be unreliable (the click itself was intermittent
+// even with different click-simulation strategies, and the page sometimes
+// failed to render even once the click did land). Resolving ids up front
+// means navigating to a selected project becomes a plain
+// chrome.tabs.update to its real URL — an ordinary browser navigation,
+// not a synthetic click — which has none of those failure modes.
+// conversations_per_gizmo=0 keeps the response small since only the
+// id/name pairing is needed here.
+async function gptGetAllProjectIds() {
+  const token = await gptGetSessionToken();
+  const resp = await gptApiGet('gizmos/snorlax/sidebar?conversations_per_gizmo=0&limit=50&owned_only=true', token);
+  const items = (resp && resp.items) || [];
+  const idByName = new Map();
+  for (const item of items) {
+    // The response's per-item shape has been observed both as
+    // {gizmo: {gizmo: {...}}} and {gizmo: {...}} depending on context —
+    // unwrap defensively rather than assume one specific nesting.
+    const g = (item && item.gizmo && item.gizmo.gizmo) || (item && item.gizmo);
+    const name = g && g.display && g.display.name;
+    if (g && g.id && name) {
+      idByName.set(name.trim(), g.id);
+    }
+  }
+  return idByName;
+}
+
 const GPT_SELECTED_CLASS = 'llmvault-gpt-selected';
 let gptSelectedProjectsByIndex = new Map(); // index -> name captured at click time
 let gptSelectionClickListener = null;
@@ -396,10 +432,35 @@ function gptStartSelectionMode() {
   return true;
 }
 
+// Cheap, synchronous — used for the live "Confirm Selection (N)" count
+// polled every 500ms while selection mode is active. Resolving project ids
+// (gptGetSelectedProjectsWithIds below) does a network request, which is
+// unnecessary overhead at that polling frequency and only actually needed
+// once, at confirm time.
 function gptGetSelectedProjects() {
   const results = [];
   for (const [index, name] of gptSelectedProjectsByIndex) {
     results.push({ index, name });
+  }
+  return results;
+}
+
+// Resolves each selected row's name to its real project id via the
+// sidebar endpoint (gptGetAllProjectIds), so the caller can navigate there
+// directly instead of needing to click anything on this page. A name that
+// can't be resolved (sidebar fetch failed, or a name mismatch) is returned
+// with id: null — the caller treats that project as failed rather than
+// guessing.
+async function gptGetSelectedProjectsWithIds() {
+  const results = [];
+  let idByName;
+  try {
+    idByName = await gptGetAllProjectIds();
+  } catch (e) {
+    idByName = new Map();
+  }
+  for (const [index, name] of gptSelectedProjectsByIndex) {
+    results.push({ index, name, id: idByName.get(name) || null });
   }
   return results;
 }
@@ -411,45 +472,6 @@ function gptStopSelectionMode() {
   gptSelectionClickListener = null;
   for (const row of gptFindProjectRows()) row.classList.remove(GPT_SELECTED_CLASS);
   gptSelectedProjectsByIndex = new Map();
-}
-
-function gptNavigateProject(index) {
-  const rows = gptFindProjectRows();
-  const row = rows[index];
-  if (!row) return { navigated: false, name: '', reason: `no project row at index ${index}` };
-  const name = gptRowName(row);
-
-  // The "start a new chat in project" button is the row's actual
-  // navigation target to the dedicated project page
-  // (/g/g-p-<id>(-<slug>)?/project) — confirmed live. ChatGPT's UI language
-  // follows the account/browser locale, so this button's aria-label isn't
-  // always French; both observed labels are matched. A locale this doesn't
-  // cover surfaces as a "could not find..." error listing every button
-  // label actually found in the row, making it easy to add.
-  const newChatBtn = row.querySelector(
-    'button[aria-label="Démarrer un nouveau chat dans le projet"], button[aria-label="Start new chat in project"]'
-  );
-  if (!newChatBtn) {
-    const labels = [...row.querySelectorAll('button[aria-label]')].map((b) => b.getAttribute('aria-label'));
-    return {
-      navigated: false,
-      name,
-      reason: `could not find the project-navigation button (buttons found in row: [${labels.join(', ') || 'none'}])`,
-    };
-  }
-  // A plain native .click() is deliberate here, not a dispatched event
-  // sequence: an earlier version of this extension used exactly this and
-  // navigation worked reliably; a later attempt at a "fuller"
-  // pointerdown/mousedown/pointerup/mouseup/click dispatch sequence (meant
-  // to be more robust) instead made navigation intermittent — sometimes it
-  // worked, sometimes nothing happened at all (confirmed live, 3/3 retry
-  // attempts all failing to even change the URL). A native .click() fires
-  // the browser's own real event sequence in one atomic call, which
-  // apparently plays more consistently with however this page's React
-  // event handlers are wired than manually dispatched events do.
-  newChatBtn.click();
-
-  return { navigated: true, name };
 }
 
 if (typeof chrome !== 'undefined' && chrome.runtime) {
@@ -478,22 +500,13 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
       sendResponse(gptGetSelectedProjects());
       return false;
     }
+    if (message && message.type === 'GET_GPT_SELECTED_PROJECTS_WITH_IDS') {
+      gptGetSelectedProjectsWithIds().then(sendResponse);
+      return true;
+    }
     if (message && message.type === 'STOP_GPT_SELECTION_MODE') {
       gptStopSelectionMode();
       sendResponse({ stopped: true });
-      return false;
-    }
-    if (message && message.type === 'NAVIGATE_GPT_PROJECT') {
-      sendResponse(gptNavigateProject(message.index));
-      return false;
-    }
-    if (message && message.type === 'GET_GPT_PROJECT_ROW_COUNT') {
-      // Diagnostic-only: lets the side panel's error log report how many
-      // project rows were actually on the page at the moment a navigation
-      // attempt failed, e.g. "index 2 requested but only 1 row found" (the
-      // selected project disappeared/reordered) vs. "0 rows found" (the
-      // page hadn't finished rendering).
-      sendResponse({ count: gptFindProjectRows().length });
       return false;
     }
     return false;
